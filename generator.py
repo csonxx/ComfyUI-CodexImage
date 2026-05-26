@@ -106,7 +106,22 @@ def _resolve_api_key(api_key: str) -> str:
     return _load_auth_from_codex_home()
 
 
-# ── HTTP ──────────────────────────────────────────────────────────────────────
+def _resolve_api_url(base_url: str) -> str:
+    """Resolve base_url to a full API endpoint URL.
+
+    Handles three cases:
+      - Full URL with scheme, e.g. https://chatgpt.com/backend-api/codex
+      - Just a path, e.g. /v1/responses  → prepend DEFAULT_BASE_URL
+      - Empty / whitespace            → use DEFAULT_BASE_URL
+    """
+    base_url = (base_url or "").strip()
+    if not base_url or base_url.startswith("/"):
+        base_url = DEFAULT_BASE_URL
+    base_url = base_url.rstrip("/")
+    # Append /responses if not already present
+    if "responses" not in base_url:
+        base_url = f"{base_url}/responses"
+    return base_url
 
 def _post_streaming(url: str, token: str, payload: dict, timeout: int) -> list[dict]:
     """POST JSON with SSE streaming, collect all data events."""
@@ -227,13 +242,7 @@ def _generate_api(
     Returns:
         (raw_image_bytes, path_to_temp_file)
     """
-    base_url = base_url.rstrip("/")
-    if "backend-api/codex" in base_url:
-        api_url = f"{base_url}/responses"
-    elif base_url.endswith("/v1"):
-        api_url = f"{base_url}/responses"
-    else:
-        api_url = f"{base_url}/v1/responses"
+    api_url = _resolve_api_url(base_url)
 
     token = _resolve_api_key(api_key)
     payload = _build_payload(prompt, model, size, quality)
