@@ -87,9 +87,9 @@ class CodexImageNode:
             },
             "optional": {
                 "output_path": ("STRING", {"default": "", "label": "output_path"}),
+                "base_url": ("STRING", {"default": DEFAULT_BASE_URL, "label": "base_url"}),
             },
             "hidden": {
-                "base_url": ("STRING", {"default": DEFAULT_BASE_URL}),
                 "api_key": ("STRING", {"default": ""}),
                 "codex_cmd": ("STRING", {"default": "codex exec -- sh -c {CMD}"}),
             },
