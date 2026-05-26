@@ -41,11 +41,15 @@ except ImportError:
 
 # ── Tensor conversion (ComfyUI only) ─────────────────────────────────────────
 
-def _image_bytes_to_tensor(img_bytes: bytes) -> "torch.Tensor":
-    """Convert raw image bytes to a ComfyUI IMAGE tensor [B, H, W, C] float32 in [0,1]."""
+def _image_bytes_to_tensor(img_bytes_or_path) -> "torch.Tensor":
+    """Convert raw image bytes or file path to a ComfyUI IMAGE tensor [B, H, W, C] float32 in [0,1]."""
     if not _HAS_COMFYU:
         raise RuntimeError("ComfyUI dependencies (torch, numpy, PIL) not available.")
-    pil = Image.open(img_bytes if isinstance(img_bytes, bytes) else open(img_bytes, "rb")).convert("RGB")
+    from io import BytesIO
+    if isinstance(img_bytes_or_path, bytes):
+        pil = Image.open(BytesIO(img_bytes_or_path)).convert("RGB")
+    else:
+        pil = Image.open(img_bytes_or_path).convert("RGB")
     np_img = np.array(pil).astype(np.float32) / 255.0
     tensor = torch.from_numpy(np_img)[None,]   # [1, H, W, C]
     tensor = tensor.to(dtype=comfy.model_management.intermediate_dtype())
