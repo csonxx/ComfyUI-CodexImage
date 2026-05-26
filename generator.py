@@ -31,13 +31,14 @@ def _log_error(msg: str, exc: Exception | None = None) -> None:
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-DEFAULT_MODEL = "gpt-5.5"
-DEFAULT_SIZE = "1024x1024"
-DEFAULT_QUALITY = "medium"
-DEFAULT_FORMAT = "png"
+# Environment variable overrides
+DEFAULT_MODEL = os.environ.get("CODEX_IMAGE_MODEL", "gpt-5.5")
+DEFAULT_SIZE = os.environ.get("CODEX_IMAGE_SIZE", "1024x1024")
+DEFAULT_QUALITY = os.environ.get("CODEX_IMAGE_QUALITY", "medium")
+DEFAULT_FORMAT = os.environ.get("CODEX_IMAGE_FORMAT", "png")
 DEFAULT_TIMEOUT = 600
-DEFAULT_BASE_URL = "https://chatgpt.com/backend-api/codex"
-DEFAULT_CODEX_SCRIPT = "~/.codex-image/scripts/codex_image.py"
+DEFAULT_BASE_URL = os.environ.get("CODEX_IMAGE_BASE_URL", "https://chatgpt.com/backend-api/codex")
+DEFAULT_CODEX_SCRIPT = os.environ.get("CODEX_IMAGE_SCRIPT", "~/.codex-image/scripts/codex_image.py")
 
 # Supported image sizes for GPT Image 2
 SUPPORTED_SIZES = (
@@ -109,18 +110,22 @@ def _resolve_api_key(api_key: str) -> str:
 def _resolve_api_url(base_url: str) -> str:
     """Resolve base_url to a full API endpoint URL.
 
-    Handles three cases:
+    Handles:
       - Full URL with scheme, e.g. https://chatgpt.com/backend-api/codex
-      - Just a path, e.g. /v1/responses  → prepend DEFAULT_BASE_URL
-      - Empty / whitespace            → use DEFAULT_BASE_URL
+      - Just a path starting with /, e.g. /v1/responses  → join with DEFAULT_BASE_URL
+      - Empty / whitespace                              → use DEFAULT_BASE_URL
     """
     base_url = (base_url or "").strip()
-    if not base_url or base_url.startswith("/"):
+    if not base_url:
         base_url = DEFAULT_BASE_URL
-    base_url = base_url.rstrip("/")
-    # Append /responses if not already present
-    if "responses" not in base_url:
-        base_url = f"{base_url}/responses"
+    elif base_url.startswith("/"):
+        # Relative path — join with DEFAULT_BASE_URL's origin
+        base = DEFAULT_BASE_URL.rstrip("/")
+        base_url = base + base_url
+    else:
+        base_url = base_url.rstrip("/")
+        if "responses" not in base_url:
+            base_url = f"{base_url}/responses"
     return base_url
 
 def _post_streaming(url: str, token: str, payload: dict, timeout: int) -> list[dict]:

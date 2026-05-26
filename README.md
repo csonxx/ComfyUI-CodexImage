@@ -73,6 +73,21 @@ python cli.py "a cat" --mode cli
 
 ## Implementation
 
+### Environment variables
+
+All env vars are read at import time and override defaults:
+
+| Variable | Default | Description |
+|---------|---------|-------------|
+| `CODEX_IMAGE_BASE_URL` | `https://chatgpt.com/backend-api/codex` | API endpoint |
+| `CODEX_IMAGE_MODEL` | `gpt-5.5` | Model name |
+| `CODEX_IMAGE_SIZE` | `1024x1024` | Default size |
+| `CODEX_IMAGE_QUALITY` | `medium` | Default quality |
+| `CODEX_IMAGE_FORMAT` | `png` | Default format |
+| `CODEX_IMAGE_SCRIPT` | `~/.codex-image/scripts/codex_image.py` | CLI mode script path |
+| `OPENAI_API_KEY` | _(empty)_ | Overrides all auth — used in `auth` mode if set |
+| `CODEX_HOME` | `~/.codex` | Codex auth directory |
+
 ### Auth priority (auth mode)
 
 1. `OPENAI_API_KEY` env var
@@ -82,7 +97,7 @@ python cli.py "a cat" --mode cli
 ### API request flow
 
 1. Build JSON payload with `model`, `instructions`, `input`, `tools` (image_generation)
-2. POST to `/{base_url}/v1/responses` with `Accept: text/event-stream`
+2. POST to resolved API URL with `Accept: text/event-stream`
 3. Read SSE stream chunk by chunk, parse `data: {...}` lines
 4. Extract base64 image from `response.image_generation_call.done` event
 5. Decode base64 → raw image bytes
