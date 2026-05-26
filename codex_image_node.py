@@ -24,6 +24,7 @@ from generator import (
     DEFAULT_QUALITY,
     DEFAULT_FORMAT,
     DEFAULT_BASE_URL,
+    SUPPORTED_SIZES,
     generate_image,
 )
 
@@ -78,10 +79,7 @@ class CodexImageNode:
                 "mode": (["api", "auth", "cli"], {"default": "auth", "label": "mode"}),
                 "prompt": ("STRING", {"multiline": True, "default": ""}),
                 "model": ("STRING", {"default": DEFAULT_MODEL}),
-                "size": (
-                    ["1024x1024", "1792x1024", "1024x1792"],
-                    {"default": DEFAULT_SIZE, "label": "size"},
-                ),
+                "size": (list(SUPPORTED_SIZES), {"default": DEFAULT_SIZE, "label": "size"}),
                 "quality": (["low", "medium", "high"], {"default": DEFAULT_QUALITY}),
                 "format": (["png", "jpeg", "webp"], {"default": DEFAULT_FORMAT}),
             },

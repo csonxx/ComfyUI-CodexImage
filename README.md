@@ -58,7 +58,7 @@ python cli.py "a cat" --mode cli
 |-------|---------|-------------|
 | `prompt` | — | Image description (required) |
 | `model` | `gpt-5.5` | Model name |
-| `size` | `1024x1024` | `1024x1024` / `1792x1024` / `1024x1792` |
+| `size` | `1024x1024` | `1024x1024` / `1536x1024` / `1024x1536` / `1792x1024` / `1024x1792` / `1920x1080` / `1080x1920` / `2048x2048` / `3840x2160` / `2160x3840` |
 | `quality` | `medium` | `low` / `medium` / `high` |
 | `format` | `png` | `png` / `jpeg` / `webp` |
 | `output_path` | _(empty)_ | Optional — save a copy to this path |

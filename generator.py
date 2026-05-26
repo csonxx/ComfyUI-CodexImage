@@ -40,7 +40,18 @@ DEFAULT_BASE_URL = "https://chatgpt.com/backend-api/codex"
 DEFAULT_CODEX_SCRIPT = "~/.codex-image/scripts/codex_image.py"
 
 # Supported image sizes for GPT Image 2
-SUPPORTED_SIZES = ("1024x1024", "1792x1024", "1024x1792")
+SUPPORTED_SIZES = (
+    "1024x1024",    # 1:1
+    "1536x1024",    # 3:2 landscape
+    "1024x1536",    # 2:3 portrait
+    "1792x1024",    # 16:9 landscape
+    "1024x1792",    # 9:16 portrait
+    "1920x1080",    # 16:9 landscape HD
+    "1080x1920",    # 9:16 portrait HD
+    "2048x2048",    # 1:1 high-res
+    "3840x2160",    # 4K 16:9
+    "2160x3840",    # 4K 9:16
+)
 
 # Regex for validating arbitrary size strings (kept for reference)
 SIZE_PATTERN = re.compile(r"^\s*(\d+)\s*[xX×]\s*(\d+)\s*$")
