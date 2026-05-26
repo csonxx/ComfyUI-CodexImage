@@ -1,27 +1,207 @@
 # ComfyUI CodexImage
 
-Custom ComfyUI node for image generation via GPT Image 2 (gpt-5.5).
-
 > **Chinese version**: [README_CN.md](README_CN.md)
 
-## Quick Start
+## Overview
 
-```bash
-# ComfyUI plugin
-cp -r . <ComfyUI>/custom_nodes/ComfyUI-CodexImage/
-# Restart ComfyUI, search for "CodexImage" in the node browser
+A ComfyUI custom node + standalone CLI for generating images via **GPT Image 2 (gpt-5.5)**. It wraps the ChatGPT Responses API with the built-in `image_generation` tool.
 
-# Standalone CLI (no ComfyUI needed)
-python cli.py "a cute cat"
+The key design goal: **reuse your existing Codex/ChatGPT authentication** — no new API key required if you already have a logged-in Codex session.
+
+---
+
+## Architecture
+
 ```
+┌─────────────────────────────────────────────────────────┐
+│                    codex_image_node.py                  │
+│         ComfyUI node class + tensor conversion          │
+│         (torch, numpy, PIL — ComfyUI environment)      │
+└──────────────────────┬──────────────────────────────────┘
+                       │ imports
+                       ▼
+┌─────────────────────────────────────────────────────────┐
+│                      generator.py                       │
+│     Core logic: HTTP/SSE/Auth — zero dependencies     │
+│              (pure Python stdlib only)                 │
+└──────────────────────┬──────────────────────────────────┘
+                       │ imports
+                       ▼
+┌─────────────────────────────────────────────────────────┐
+│                        cli.py                          │
+│         Standalone CLI entry point — no deps           │
+│         (pure Python stdlib, no torch needed)         │
+└─────────────────────────────────────────────────────────┘
+```
+
+- **`generator.py`**: No third-party imports. Does HTTP POST, SSE streaming, auth resolution, SSE event parsing, base64 decoding.
+- **`codex_image_node.py`**: Imports `generator.py`. Adds ComfyUI tensor conversion (`[B, H, W, C]` float32 in `[0,1]`) and the `CodexImageNode` class.
+- **`cli.py`**: Imports `generator.py` directly. Provides a plain CLI without any ComfyUI dependency.
+
+---
 
 ## Three Modes
 
-| Mode | `mode` value | Auth |
-|------|-------------|------|
-| **API** | `api` | User provides `base_url` + `api_key` |
-| **Codex Auth** | `auth` | Auto-reads `~/.codex/auth.json` (OAuth token or `OPENAI_API_KEY` field) |
-| **CLI** | `cli` | Calls `codex exec` — uses locally logged-in Codex credentials |
+| Mode | How it works |
+|------|-------------|
+| `api` | Direct HTTP POST to a user-provided `base_url` + `api_key` |
+| `auth` | Same HTTP POST, but credentials are auto-loaded from `~/.codex/auth.json` (zero config needed) |
+| `cli` | Spawns `codex exec` as a subprocess; the codex CLI handles auth internally |
+
+---
+
+## Implementation Principles
+
+### 1. API Request Flow (modes: `api`, `auth`)
+
+```
+User prompt
+    │
+    ▼
+_build_payload()
+    │ builds JSON body:
+    │ {
+    │   "model": "gpt-5.5",
+    │   "instructions": "Generate the requested image...",
+    │   "input": [{"role": "user", "content": prompt}],
+    │   "tools": [{"type": "image_generation", "size": "...", "quality": "..."}],
+    │   "stream": true
+    │ }
+    ▼
+urllib.request.Request
+    │ POST with headers:
+    │   Authorization: Bearer <token>
+    │   Accept: text/event-stream
+    ▼
+POST to {base_url}/responses
+    │
+    ▼
+SSE stream (chunked transfer)
+    │ response arrives as repeated "data: {...}" lines
+    │
+    ▼
+_post_streaming() — SSE parsing
+    │ reads 4 KB chunks, accumulates in line buffer,
+    │ splits on "\n", strips "data: " prefix,
+    │ parses each as JSON → list of event dicts
+    │
+    ▼
+_extract_image() — find the image event
+    │ looks for:
+    │   ev["type"] == "response.image_generation_call.done"
+    │   ev["result"]  ← base64-encoded image string
+    │
+    ▼
+base64.b64decode(img_b64) → raw image bytes
+    │
+    ▼
+_bytes_to_tensor() → ComfyUI IMAGE tensor [1, H, W, C] float32 [0,1]
+```
+
+### 2. Auth Resolution (`_resolve_api_key`)
+
+```
+api_key provided by user?
+    │
+    ├─ YES → use it directly as Bearer token
+    │
+    └─ NO (auth mode):
+           │
+           ▼
+       1. OPENAI_API_KEY env var
+           │ found? → use it
+           └─ not found
+              │
+              ▼
+           2. ~/.codex/auth.json → "OPENAI_API_KEY" field
+              │ found? → use it
+              └─ not found
+                 │
+                 ▼
+              3. ~/.codex/auth.json → "tokens.access_token"
+                 │ (ChatGPT OAuth token from `codex login`)
+                 │ found? → use it
+                 └─ not found → raise ValueError
+```
+
+### 3. CLI Mode (`_generate_cli`)
+
+```
+Build inner script command:
+  python <script_path> <prompt> --size X --quality X --format X --out /tmp/xxx.png
+
+Wrap with codex exec template:
+  codex exec -- sh -c "python <script> ..."
+
+subprocess.run() → captures stdout
+  codex_image.py prints the output path as last stdout line:
+    /tmp/xxx.png
+
+Read the file at that path → raw bytes
+```
+
+### 4. Tensor Format
+
+ComfyUI IMAGE tensors follow `[B, H, W, C]` with float32 in `[0, 1]`:
+
+```
+PIL.Image.open(bytes)  →  RGB PIL image
+numpy.array(pil)       →  [H, W, C] uint8 [0, 255]
+astype(np.float32)/255.0 →  [H, W, C] float32 [0, 1]
+torch.from_numpy()[None, ] →  [1, H, W, C]
+to(dtype=torch.float32)   →  final tensor
+```
+
+---
+
+## File Manifest
+
+| File | Purpose | Dependencies |
+|------|---------|-------------|
+| `generator.py` | Core logic: payload building, HTTP POST, SSE parsing, auth, base64 decode | None (stdlib) |
+| `codex_image_node.py` | ComfyUI node + tensor conversion | torch, numpy, Pillow |
+| `cli.py` | Standalone CLI | None |
+
+---
+
+## Environment Variables
+
+All read at import time:
+
+| Variable | Default | Description |
+|---------|---------|-------------|
+| `CODEX_IMAGE_BASE_URL` | `https://chatgpt.com/backend-api/codex` | API endpoint |
+| `CODEX_IMAGE_MODEL` | `gpt-5.5` | Model name |
+| `CODEX_IMAGE_SIZE` | `1024x1024` | Default size |
+| `CODEX_IMAGE_QUALITY` | `medium` | Default quality |
+| `CODEX_IMAGE_FORMAT` | `png` | Default format |
+| `CODEX_IMAGE_SCRIPT` | `~/.codex-image/scripts/codex_image.py` | CLI mode script path |
+| `OPENAI_API_KEY` | _(empty)_ | Overrides all auth (highest priority) |
+| `CODEX_HOME` | `~/.codex` | Codex auth directory |
+
+---
+
+## Node Parameters
+
+| Param | Default | Description |
+|-------|---------|-------------|
+| `mode` | `auth` | `api` / `auth` / `cli` |
+| `prompt` | — | Image description (required) |
+| `model` | `gpt-5.5` | Model name |
+| `size` | `1024x1024` | `1024x1024` / `1536x1024` / `1024x1536` / `1792x1024` / `1024x1792` / `1920x1080` / `1080x1920` / `2048x2048` / `3840x2160` / `2160x3840` |
+| `quality` | `medium` | `low` / `medium` / `high` |
+| `format` | `png` | `png` / `jpeg` / `webp` |
+| `output_path` | _(empty)_ | Save a copy to this path |
+
+**Hidden params:**
+
+| Param | Default | Mode |
+|-------|---------|------|
+| `base_url` | `https://chatgpt.com/backend-api/codex` | `api` |
+| `api_key` | _(empty)_ | `api` |
+| `codex_cmd` | `codex exec -- sh -c {CMD}` | `cli` |
+
+---
 
 ## CLI Usage
 
@@ -34,70 +214,15 @@ python cli.py "a cat" --mode api \
   --base-url https://chatgpt.com/backend-api/codex \
   --api-key sk-xxxx
 
-# CLI mode (codex exec)
+# CLI mode (via codex exec)
 python cli.py "a cat" --mode cli
+
+# Specify output path
+python cli.py "a cat" --out ./output.png
 ```
-
-## Files
-
-| File | Purpose | Dependencies |
-|------|---------|--------------|
-| `generator.py` | Core generation logic (HTTP/SSE/Auth) | None (stdlib only) |
-| `codex_image_node.py` | ComfyUI node class + tensor conversion | torch, numpy, Pillow |
-| `cli.py` | Standalone CLI entry point | None |
 
 ## Workflow
 
 ```
 [CLIP Text Encode] → [CodexImageNode] → [PreviewImage / SaveImage]
 ```
-
-## Node Parameters
-
-| Param | Default | Description |
-|-------|---------|-------------|
-| `prompt` | — | Image description (required) |
-| `model` | `gpt-5.5` | Model name |
-| `size` | `1024x1024` | `1024x1024` / `1536x1024` / `1024x1536` / `1792x1024` / `1024x1792` / `1920x1080` / `1080x1920` / `2048x2048` / `3840x2160` / `2160x3840` |
-| `quality` | `medium` | `low` / `medium` / `high` |
-| `format` | `png` | `png` / `jpeg` / `webp` |
-| `output_path` | _(empty)_ | Optional — save a copy to this path |
-
-**Hidden params:**
-
-| Param | Default | Mode |
-|-------|---------|------|
-| `base_url` | `https://chatgpt.com/backend-api/codex` | `api` |
-| `api_key` | _(empty)_ | `api` |
-| `codex_cmd` | `codex exec -- sh -c {CMD}` | `cli` |
-
-## Implementation
-
-### Environment variables
-
-All env vars are read at import time and override defaults:
-
-| Variable | Default | Description |
-|---------|---------|-------------|
-| `CODEX_IMAGE_BASE_URL` | `https://chatgpt.com/backend-api/codex` | API endpoint |
-| `CODEX_IMAGE_MODEL` | `gpt-5.5` | Model name |
-| `CODEX_IMAGE_SIZE` | `1024x1024` | Default size |
-| `CODEX_IMAGE_QUALITY` | `medium` | Default quality |
-| `CODEX_IMAGE_FORMAT` | `png` | Default format |
-| `CODEX_IMAGE_SCRIPT` | `~/.codex-image/scripts/codex_image.py` | CLI mode script path |
-| `OPENAI_API_KEY` | _(empty)_ | Overrides all auth — used in `auth` mode if set |
-| `CODEX_HOME` | `~/.codex` | Codex auth directory |
-
-### Auth priority (auth mode)
-
-1. `OPENAI_API_KEY` env var
-2. `OPENAI_API_KEY` field in `~/.codex/auth.json`
-3. ChatGPT OAuth `access_token` in `~/.codex/auth.json` (from `codex login`)
-
-### API request flow
-
-1. Build JSON payload with `model`, `instructions`, `input`, `tools` (image_generation)
-2. POST to resolved API URL with `Accept: text/event-stream`
-3. Read SSE stream chunk by chunk, parse `data: {...}` lines
-4. Extract base64 image from `response.image_generation_call.done` event
-5. Decode base64 → raw image bytes
