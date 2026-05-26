@@ -23,6 +23,7 @@ from generator import (
     DEFAULT_QUALITY,
     DEFAULT_FORMAT,
     DEFAULT_BASE_URL,
+    SUPPORTED_SIZES,
     generate_image,
 )
 
@@ -31,7 +32,7 @@ def main() -> int:
     p = argparse.ArgumentParser(description="CodexImage standalone generator")
     p.add_argument("prompt", help="Image description")
     p.add_argument("--model", default=DEFAULT_MODEL)
-    p.add_argument("--size", default=DEFAULT_SIZE)
+    p.add_argument("--size", default=DEFAULT_SIZE, choices=SUPPORTED_SIZES)
     p.add_argument("--quality", default=DEFAULT_QUALITY, choices=["low", "medium", "high"])
     p.add_argument("--format", default=DEFAULT_FORMAT, choices=["png", "jpeg", "webp"])
     p.add_argument("--out", default="", help="Output file path")

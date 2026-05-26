@@ -79,8 +79,8 @@ class CodexImageNode:
                 "prompt": ("STRING", {"multiline": True, "default": ""}),
                 "model": ("STRING", {"default": DEFAULT_MODEL}),
                 "size": (
-                    "STRING",
-                    {"default": DEFAULT_SIZE, "label": "size", "hint": "e.g. 1024x1024, 1792x1024"},
+                    ["1024x1024", "1792x1024", "1024x1792"],
+                    {"default": DEFAULT_SIZE, "label": "size"},
                 ),
                 "quality": (["low", "medium", "high"], {"default": DEFAULT_QUALITY}),
                 "format": (["png", "jpeg", "webp"], {"default": DEFAULT_FORMAT}),

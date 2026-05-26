@@ -39,6 +39,10 @@ DEFAULT_TIMEOUT = 600
 DEFAULT_BASE_URL = "https://chatgpt.com/backend-api/codex"
 DEFAULT_CODEX_SCRIPT = "~/.codex-image/scripts/codex_image.py"
 
+# Supported image sizes for GPT Image 2
+SUPPORTED_SIZES = ("1024x1024", "1792x1024", "1024x1792")
+
+# Regex for validating arbitrary size strings (kept for reference)
 SIZE_PATTERN = re.compile(r"^\s*(\d+)\s*[xX×]\s*(\d+)\s*$")
 
 # ── Auth ─────────────────────────────────────────────────────────────────────
