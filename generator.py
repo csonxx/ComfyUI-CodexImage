@@ -20,6 +20,15 @@ import tempfile
 from pathlib import Path
 from typing import Any, Literal
 
+# Simple print-based error logger
+def _log_error(msg: str, exc: Exception | None = None) -> None:
+    timestamp = __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    prefix = f"[codex_image][{timestamp}] ERROR"
+    print(f"{prefix} {msg}", file=sys.stderr)
+    if exc:
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 DEFAULT_MODEL = "gpt-5.5"
@@ -45,14 +54,18 @@ def _load_auth_from_codex_home() -> str:
     codex_home = Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser()
     auth_path = codex_home / "auth.json"
     if not auth_path.exists():
-        raise FileNotFoundError(
+        msg = (
             f"auth.json not found at {auth_path}. "
             "Run `codex login` or set OPENAI_API_KEY environment variable."
         )
+        _log_error(msg)
+        raise FileNotFoundError(msg)
     try:
         data = json.loads(auth_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise RuntimeError(f"Failed to read {auth_path}: {exc}") from exc
+        msg = f"Failed to read {auth_path}: {exc}"
+        _log_error(msg, exc)
+        raise RuntimeError(msg) from exc
 
     field_key = (data.get("OPENAI_API_KEY") or "").strip()
     if field_key:
@@ -64,10 +77,12 @@ def _load_auth_from_codex_home() -> str:
         if at:
             return at
 
-    raise ValueError(
+    msg = (
         "No credentials found in ~/.codex/auth.json. "
         "Run `codex login` or set OPENAI_API_KEY in auth.json."
     )
+    _log_error(msg)
+    raise ValueError(msg)
 
 
 def _resolve_api_key(api_key: str) -> str:
@@ -110,9 +125,13 @@ def _post_streaming(url: str, token: str, payload: dict, timeout: int) -> list[d
                             pass
     except error.HTTPError as exc:
         body_text = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"Request failed: status={exc.code}\n{body_text}") from exc
+        msg = f"POST {url} failed: status={exc.code}\n{body_text}"
+        _log_error(msg, exc)
+        raise RuntimeError(msg) from exc
     except error.URLError as exc:
-        raise RuntimeError(f"Request failed: {exc}") from exc
+        msg = f"POST {url} failed: {exc}"
+        _log_error(msg, exc)
+        raise RuntimeError(msg) from exc
 
     return events
 
