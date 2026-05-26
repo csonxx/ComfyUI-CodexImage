@@ -52,7 +52,9 @@ def _image_bytes_to_tensor(img_bytes_or_path) -> "torch.Tensor":
         pil = Image.open(img_bytes_or_path).convert("RGB")
     np_img = np.array(pil).astype(np.float32) / 255.0
     tensor = torch.from_numpy(np_img)[None,]   # [1, H, W, C]
-    tensor = tensor.to(dtype=torch.float32)
+    # Use intermediate_dtype if available (some ComfyUI versions), otherwise fall back to float32
+    dtype_fn = getattr(comfy.model_management, "intermediate_dtype", None)
+    tensor = tensor.to(dtype=dtype_fn() if dtype_fn else torch.float32)
     return tensor
 
 
