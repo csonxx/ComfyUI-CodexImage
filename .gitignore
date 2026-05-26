@@ -1,0 +1,29 @@
+__pycache__/
+*.py[cod]
+*.pyc
+.pytest_cache/
+.coverage
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Local env
+.env
+.env.local
+venv/
+.venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude
+.claude/

@@ -1,0 +1,4 @@
+# ComfyUI plugin dependencies
+torch
+numpy
+Pillow
