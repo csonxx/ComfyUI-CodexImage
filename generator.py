@@ -17,6 +17,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Literal
 
@@ -37,6 +38,10 @@ DEFAULT_SIZE = os.environ.get("CODEX_IMAGE_SIZE", "1024x1024")
 DEFAULT_QUALITY = os.environ.get("CODEX_IMAGE_QUALITY", "medium")
 DEFAULT_FORMAT = os.environ.get("CODEX_IMAGE_FORMAT", "png")
 DEFAULT_TIMEOUT = 600
+DEFAULT_MAX_RETRIES = int(os.environ.get("CODEX_IMAGE_MAX_RETRIES", "8"))
+DEFAULT_RETRY_BASE_SECONDS = float(os.environ.get("CODEX_IMAGE_RETRY_BASE_SECONDS", "2"))
+DEFAULT_RETRY_MAX_SECONDS = float(os.environ.get("CODEX_IMAGE_RETRY_MAX_SECONDS", "90"))
+DEFAULT_RATE_LIMIT_FLOOR_SECONDS = float(os.environ.get("CODEX_IMAGE_RATE_LIMIT_FLOOR_SECONDS", "65"))
 DEFAULT_BASE_URL = os.environ.get("CODEX_IMAGE_BASE_URL", "https://chatgpt.com/backend-api/codex")
 DEFAULT_CODEX_SCRIPT = os.environ.get("CODEX_IMAGE_SCRIPT", "~/.codex-image/scripts/codex_image.py")
 
@@ -162,6 +167,13 @@ def _post_streaming(url: str, token: str, payload: dict, timeout: int) -> list[d
         body_text = exc.read().decode("utf-8", errors="replace")
         msg = f"POST {url} failed: status={exc.code}\n{body_text}"
         _log_error(msg, exc)
+        if exc.code == 429:
+            raise CodexImageRateLimitError(
+                msg,
+                _parse_retry_after_seconds(body_text),
+            ) from exc
+        if exc.code >= 500:
+            raise CodexImageTransientAPIError(str(exc.code), msg) from exc
         raise RuntimeError(msg) from exc
     except error.URLError as exc:
         msg = f"POST {url} failed: {exc}"
@@ -169,6 +181,85 @@ def _post_streaming(url: str, token: str, payload: dict, timeout: int) -> list[d
         raise RuntimeError(msg) from exc
 
     return events
+
+
+class CodexImageRateLimitError(RuntimeError):
+    def __init__(self, message: str, retry_after_seconds: float | None = None) -> None:
+        super().__init__(message)
+        self.retry_after_seconds = retry_after_seconds
+
+
+class CodexImageTransientAPIError(RuntimeError):
+    def __init__(self, code: str, message: str) -> None:
+        self.code = code or "unknown"
+        self.message = message
+        super().__init__(f"Codex image API error ({self.code}): {message}")
+
+
+def _parse_retry_after_seconds(message: str) -> float | None:
+    match = re.search(r"try again in\s+(\d+(?:\.\d+)?)\s*(ms|s)", message, re.I)
+    if not match:
+        return None
+    value = float(match.group(1))
+    unit = match.group(2).lower()
+    return value / 1000.0 if unit == "ms" else value
+
+
+def _rate_limit_floor_seconds(message: str) -> float:
+    if "per min" in message.lower():
+        return DEFAULT_RATE_LIMIT_FLOOR_SECONDS
+    return 0.0
+
+
+def _build_rate_limit_message(exc: CodexImageRateLimitError, attempts: int) -> str:
+    return (
+        f"{exc}\n"
+        f"Codex image generation is still rate limited after {attempts} attempts. "
+        "Wait a few minutes, stop other image-generation jobs that share this "
+        "account or organization, or lower ComfyUI queue concurrency before retrying. "
+        "You can tune CODEX_IMAGE_MAX_RETRIES, CODEX_IMAGE_RETRY_MAX_SECONDS, and "
+        "CODEX_IMAGE_RATE_LIMIT_FLOOR_SECONDS if you want ComfyUI to wait longer."
+    )
+
+
+def _is_retryable_api_code(code: str) -> bool:
+    code = code.lower()
+    return code in {
+        "server_error",
+        "internal_error",
+        "temporarily_unavailable",
+        "service_unavailable",
+        "server_is_overloaded",
+        "overloaded",
+        "capacity_exceeded",
+        "timeout",
+        "gateway_timeout",
+    } or code.startswith("5")
+
+
+def _build_transient_api_message(exc: CodexImageTransientAPIError, attempts: int) -> str:
+    return (
+        f"{exc}\n"
+        f"Codex image API kept returning a temporary server error after {attempts} attempts. "
+        "Retry later. If the same request ID keeps appearing, include it when contacting support."
+    )
+
+
+def _raise_api_error_if_present(events: list[dict]) -> None:
+    for ev in events:
+        err = ev.get("error")
+        if not err and isinstance(ev.get("response"), dict):
+            err = ev["response"].get("error")
+        if not isinstance(err, dict):
+            continue
+
+        code = str(err.get("code") or "")
+        message = str(err.get("message") or err)
+        if code == "rate_limit_exceeded":
+            raise CodexImageRateLimitError(message, _parse_retry_after_seconds(message))
+        if _is_retryable_api_code(code):
+            raise CodexImageTransientAPIError(code, message)
+        raise RuntimeError(f"Codex image API error ({code or 'unknown'}): {message}")
 
 
 def _extract_image(events: list[dict]) -> str:
@@ -193,6 +284,8 @@ def _extract_image(events: list[dict]) -> str:
                 if o.get("type") == "image_generation_call" and o.get("result"):
                     return str(o["result"])
 
+    _raise_api_error_if_present(events)
+
     tail = events[-3:] if len(events) > 3 else events
     raise RuntimeError(
         f"No generated image found in SSE events:\n"
@@ -202,9 +295,17 @@ def _extract_image(events: list[dict]) -> str:
 
 # ── Payload ───────────────────────────────────────────────────────────────────
 
-def _build_payload(prompt: str, model: str, size: str, quality: str) -> dict[str, Any]:
+def _build_payload(
+    prompt: str,
+    model: str,
+    size: str,
+    quality: str,
+    input_image_urls: list[str] | None = None,
+    action: str = "auto",
+) -> dict[str, Any]:
     """Build the request body for the Codex Responses API."""
     actual_model = DEFAULT_MODEL if model.startswith("gpt-image") else model
+    input_image_urls = input_image_urls or []
 
     dim = SIZE_PATTERN.match(size)
     if dim:
@@ -212,11 +313,26 @@ def _build_payload(prompt: str, model: str, size: str, quality: str) -> dict[str
         orient = "square" if w == h else ("landscape" if w > h else "portrait")
         prompt = f"{prompt}\n\nFinal output: {w}x{h} pixel {orient} canvas."
 
+    tool = {"type": "image_generation", "size": size, "quality": quality}
+    if input_image_urls:
+        tool["action"] = action or "edit"
+        content: list[dict[str, str]] = [{"type": "input_text", "text": prompt}]
+        content.extend(
+            {"type": "input_image", "image_url": image_url}
+            for image_url in input_image_urls
+            if image_url
+        )
+        input_value: str | list[dict[str, Any]] = [
+            {"role": "user", "content": content}
+        ]
+    else:
+        input_value = [{"role": "user", "content": prompt}]
+
     return {
         "model": actual_model,
         "instructions": "Generate the requested image using the image_generation tool.",
-        "input": [{"role": "user", "content": prompt}],
-        "tools": [{"type": "image_generation", "size": size, "quality": quality}],
+        "input": input_value,
+        "tools": [tool],
         "store": False,
         "stream": True,
     }
@@ -232,6 +348,8 @@ def _generate_api(
     fmt: str,
     base_url: str,
     api_key: str,
+    input_image_urls: list[str] | None = None,
+    action: str = "auto",
 ) -> tuple[bytes, str]:
     """Generate an image via direct HTTP to the Codex Responses API.
 
@@ -250,9 +368,49 @@ def _generate_api(
     api_url = _resolve_api_url(base_url)
 
     token = _resolve_api_key(api_key)
-    payload = _build_payload(prompt, model, size, quality)
-    events = _post_streaming(api_url, token, payload, DEFAULT_TIMEOUT)
-    img_b64 = _extract_image(events)
+    payload = _build_payload(
+        prompt,
+        model,
+        size,
+        quality,
+        input_image_urls=input_image_urls,
+        action=action,
+    )
+    last_retryable_error: RuntimeError | None = None
+
+    for attempt in range(max(1, DEFAULT_MAX_RETRIES)):
+        try:
+            events = _post_streaming(api_url, token, payload, DEFAULT_TIMEOUT)
+            img_b64 = _extract_image(events)
+            break
+        except (CodexImageRateLimitError, CodexImageTransientAPIError) as exc:
+            last_retryable_error = exc
+            if attempt >= DEFAULT_MAX_RETRIES - 1:
+                if isinstance(exc, CodexImageRateLimitError):
+                    raise CodexImageRateLimitError(
+                        _build_rate_limit_message(exc, attempt + 1),
+                        exc.retry_after_seconds,
+                    ) from exc
+                raise RuntimeError(_build_transient_api_message(exc, attempt + 1)) from exc
+            is_rate_limit = isinstance(exc, CodexImageRateLimitError)
+            retry_after = exc.retry_after_seconds if is_rate_limit else None
+            backoff = DEFAULT_RETRY_BASE_SECONDS * (2 ** attempt)
+            delay = max(
+                retry_after or 0.0,
+                backoff,
+                _rate_limit_floor_seconds(str(exc)) if is_rate_limit else 0.0,
+            )
+            delay = min(delay, DEFAULT_RETRY_MAX_SECONDS)
+            reason = "rate limited" if is_rate_limit else "temporary API error"
+            print(
+                f"[codex_image] {reason}; retrying in {delay:.1f}s "
+                f"({attempt + 2}/{DEFAULT_MAX_RETRIES})",
+                file=sys.stderr,
+            )
+            time.sleep(delay)
+    else:
+        raise last_retryable_error or RuntimeError("Codex image generation failed")
+
     img_bytes = base64.b64decode(img_b64)
 
     ext = f".{fmt}"
@@ -362,6 +520,8 @@ def generate_image(
     base_url: str = DEFAULT_BASE_URL,
     api_key: str = "",
     codex_cmd: str = "codex exec -- sh -c {CMD}",
+    input_image_urls: list[str] | None = None,
+    action: str = "auto",
 ) -> tuple[bytes, str]:
     """Generate an image.
 
@@ -383,6 +543,8 @@ def generate_image(
         raise ValueError("prompt cannot be empty")
 
     if mode == "cli":
+        if input_image_urls:
+            raise ValueError("image input is only supported in api/auth mode")
         return _generate_cli(
             prompt=prompt,
             model=model,
@@ -402,4 +564,6 @@ def generate_image(
             fmt=fmt,
             base_url=base_url,
             api_key=resolved_key,
+            input_image_urls=input_image_urls,
+            action=action,
         )

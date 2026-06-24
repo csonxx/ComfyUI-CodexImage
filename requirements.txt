@@ -1,4 +1,7 @@
-# ComfyUI plugin dependencies
-torch
-numpy
-Pillow
+# No extra pip dependencies.
+#
+# This node uses ComfyUI's own Python environment packages:
+# torch, numpy, and Pillow.
+#
+# Do not install torch from this package; ComfyUI already provides the
+# matching PyTorch/CUDA build for the user's installation.
