@@ -64,7 +64,17 @@ export CODEX_IMAGE_OPENROUTER_MODEL="openai/gpt-image-2"
 
 export LITELLM_API_KEY="sk-..."
 export CODEX_IMAGE_LITELLM_BASE_URL="http://localhost:4000"
-export CODEX_IMAGE_LITELLM_MODEL="openrouter/openai/gpt-image-2"
+export CODEX_IMAGE_LITELLM_MODEL="gpt-image-2"
+```
+
+为了兼容旧 workflow，LiteLLM 节点会把 `openrouter/gpt-image-2`、`openrouter/openai/gpt-image-2` 这类旧 OpenRouter 风格的 GPT Image 别名自动归一化成 `gpt-image-2`。
+
+Docker 部署时，这些环境变量需要在启动 ComfyUI 前注入。后续 `docker exec` 进入容器看到的 shell 环境变量，不一定等于已经运行中的 ComfyUI Python 进程环境。可以用下面命令检查进程环境，且不打印完整 key：
+
+```bash
+pid=$(pgrep -f "python.*main.py" | head -1)
+tr '\0' '\n' < /proc/$pid/environ | grep -E '^(OPENROUTER_API_KEY|CODEX_IMAGE_OPENROUTER_API_KEY)=' | wc -l
+tr '\0' '\n' < /proc/$pid/environ | sed -n -E 's/^(OPENROUTER_API_KEY|CODEX_IMAGE_OPENROUTER_API_KEY)=//p' | head -1 | awk '{print length($0), substr($0,1,8)}'
 ```
 
 这两个节点支持纯 prompt 生图。接入 `image`、`image_2` 或 `mask` 时，会按 provider 能力走图像编辑/参考图请求。
@@ -201,7 +211,7 @@ to(dtype=torch.float32)   →  最终 tensor
 | `CODEX_IMAGE_OPENROUTER_MODEL` | `openai/gpt-image-2` | OpenRouter 节点默认模型 |
 | `CODEX_IMAGE_OPENROUTER_API_KEY` / `OPENROUTER_API_KEY` | _(空)_ | OpenRouter API key |
 | `CODEX_IMAGE_LITELLM_BASE_URL` | `http://localhost:4000` | LiteLLM proxy base URL 或 images endpoint |
-| `CODEX_IMAGE_LITELLM_MODEL` | `openrouter/openai/gpt-image-2` | LiteLLM 节点默认模型 |
+| `CODEX_IMAGE_LITELLM_MODEL` | `gpt-image-2` | LiteLLM 节点默认模型 |
 | `CODEX_IMAGE_LITELLM_API_KEY` / `LITELLM_API_KEY` / `LITELLM_MASTER_KEY` | _(空)_ | LiteLLM proxy API key |
 
 ---
@@ -246,7 +256,7 @@ python cli.py "a cat" --mode cli
 python cli.py "a cat" --mode openrouter --model openai/gpt-image-2
 
 # LiteLLM 模式（使用 LITELLM_API_KEY）
-python cli.py "a cat" --mode litellm --model openrouter/openai/gpt-image-2
+python cli.py "a cat" --mode litellm --model gpt-image-2
 
 # 指定输出路径
 python cli.py "a cat" --out ./output.png

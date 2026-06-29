@@ -30,10 +30,20 @@ LiteLLM 节点同样通过环境变量配置：
 ```bash
 export LITELLM_API_KEY="sk-..."
 export CODEX_IMAGE_LITELLM_BASE_URL="http://localhost:4000"
-export CODEX_IMAGE_LITELLM_MODEL="openrouter/openai/gpt-image-2"
+export CODEX_IMAGE_LITELLM_MODEL="gpt-image-2"
 ```
 
 `CODEX_IMAGE_OPENROUTER_MODEL` 和 `CODEX_IMAGE_LITELLM_MODEL` 只是默认值，节点上仍然可以手动填写模型名。
+
+为了兼容旧 workflow，LiteLLM 节点会把 `openrouter/gpt-image-2`、`openrouter/openai/gpt-image-2` 这类旧 OpenRouter 风格的 GPT Image 别名自动归一化成 `gpt-image-2`。
+
+如果在 Docker 里排查 OpenRouter 401，不要只看 `docker exec` shell 的 `env`。要确认 ComfyUI 进程本身有 key：
+
+```bash
+pid=$(pgrep -f "python.*main.py" | head -1)
+tr '\0' '\n' < /proc/$pid/environ | grep -E '^(OPENROUTER_API_KEY|CODEX_IMAGE_OPENROUTER_API_KEY)=' | wc -l
+tr '\0' '\n' < /proc/$pid/environ | sed -n -E 's/^(OPENROUTER_API_KEY|CODEX_IMAGE_OPENROUTER_API_KEY)=//p' | head -1 | awk '{print length($0), substr($0,1,8)}'
+```
 
 ## I2I 和 Mask
 

@@ -47,7 +47,7 @@ DEFAULT_CODEX_SCRIPT = os.environ.get("CODEX_IMAGE_SCRIPT", "~/.codex-image/scri
 DEFAULT_OPENROUTER_BASE_URL = os.environ.get("CODEX_IMAGE_OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1/images")
 DEFAULT_OPENROUTER_MODEL = os.environ.get("CODEX_IMAGE_OPENROUTER_MODEL", "openai/gpt-image-2")
 DEFAULT_LITELLM_BASE_URL = os.environ.get("CODEX_IMAGE_LITELLM_BASE_URL", "http://localhost:4000")
-DEFAULT_LITELLM_MODEL = os.environ.get("CODEX_IMAGE_LITELLM_MODEL", "openrouter/openai/gpt-image-2")
+DEFAULT_LITELLM_MODEL = os.environ.get("CODEX_IMAGE_LITELLM_MODEL", "gpt-image-2")
 
 # Supported image sizes for GPT Image 2
 SUPPORTED_SIZES = (
@@ -169,13 +169,21 @@ def _resolve_litellm_url(base_url: str, edit: bool = False) -> str:
 def _resolve_env_api_key(api_key: str, env_names: tuple[str, ...], label: str) -> str:
     """Resolve a provider API key from an explicit value or environment variables."""
     if api_key and api_key.strip():
-        return api_key.strip()
+        return _normalize_bearer_token(api_key)
     for name in env_names:
         value = os.environ.get(name, "").strip()
         if value:
-            return value
+            return _normalize_bearer_token(value)
     names = " or ".join(env_names)
     raise ValueError(f"{label} API key not found. Set {names}.")
+
+
+def _normalize_bearer_token(value: str) -> str:
+    """Accept either a raw token or an accidentally pasted Bearer token."""
+    token = (value or "").strip()
+    if token.lower().startswith("bearer "):
+        return token[7:].strip()
+    return token
 
 
 def _with_size_hint(prompt: str, size: str) -> str:
@@ -230,6 +238,41 @@ def _download_image_url(url: str, token: str = "") -> bytes:
     with request.urlopen(req, timeout=DEFAULT_TIMEOUT) as resp:
         return resp.read()
 
+
+def _augment_http_error_message(url: str, status: int, body_text: str) -> str:
+    """Add provider-specific setup hints without hiding the original response."""
+    hints: list[str] = []
+    lower_body = body_text.lower()
+    if status == 401 and "openrouter.ai" in url:
+        hints.append(
+            "OpenRouter authentication failed. Make sure the ComfyUI process has "
+            "CODEX_IMAGE_OPENROUTER_API_KEY or OPENROUTER_API_KEY set to a valid "
+            "OpenRouter key, usually starting with sk-or-. In Docker, check the "
+            "running ComfyUI Python process environment, not only a docker exec shell."
+        )
+    if status == 403 and "key_model_access_denied" in lower_body:
+        hints.append(
+            "LiteLLM rejected the model name for this key. Use one of the model "
+            "aliases allowed by the LiteLLM key; for this setup, try gpt-image-2."
+        )
+    if not hints:
+        return body_text
+    return f"{body_text}\n\nHints:\n- " + "\n- ".join(hints)
+
+
+def _normalize_litellm_model(model: str) -> str:
+    """Normalize old OpenRouter-style defaults to the LiteLLM model group name."""
+    model = (model or "").strip()
+    if not model:
+        return DEFAULT_LITELLM_MODEL
+
+    aliases = {
+        "openrouter/gpt-image-2": "gpt-image-2",
+        "openrouter/openai/gpt-image-2": "gpt-image-2",
+    }
+    return aliases.get(model.lower(), model)
+
+
 def _post_streaming(url: str, token: str, payload: dict, timeout: int) -> list[dict]:
     """POST JSON with SSE streaming, collect all data events."""
     from urllib import error, request
@@ -262,6 +305,7 @@ def _post_streaming(url: str, token: str, payload: dict, timeout: int) -> list[d
                             pass
     except error.HTTPError as exc:
         body_text = exc.read().decode("utf-8", errors="replace")
+        body_text = _augment_http_error_message(url, exc.code, body_text)
         msg = f"POST {url} failed: status={exc.code}\n{body_text}"
         _log_error(msg, exc)
         if exc.code == 429:
@@ -534,6 +578,7 @@ def _post_json(
             text = resp.read().decode("utf-8", errors="replace")
     except error.HTTPError as exc:
         body_text = exc.read().decode("utf-8", errors="replace")
+        body_text = _augment_http_error_message(url, exc.code, body_text)
         msg = f"POST {url} failed: status={exc.code}\n{body_text}"
         _log_error(msg, exc)
         if exc.code == 429:
@@ -606,6 +651,7 @@ def _post_multipart(
             text = resp.read().decode("utf-8", errors="replace")
     except error.HTTPError as exc:
         body_text = exc.read().decode("utf-8", errors="replace")
+        body_text = _augment_http_error_message(url, exc.code, body_text)
         msg = f"POST {url} failed: status={exc.code}\n{body_text}"
         _log_error(msg, exc)
         if exc.code == 429:
@@ -726,8 +772,9 @@ def _build_litellm_generation_payload(
     size: str,
     quality: str,
 ) -> dict[str, Any]:
+    model = _normalize_litellm_model(model)
     payload: dict[str, Any] = {
-        "model": model or DEFAULT_LITELLM_MODEL,
+        "model": model,
         "prompt": _with_size_hint(prompt, size),
         "n": 1,
         "size": size,
@@ -774,11 +821,12 @@ def _generate_litellm(
         "LiteLLM",
     )
 
+    model = _normalize_litellm_model(model)
     input_image_urls = input_image_urls or []
     if input_image_urls:
         url = _resolve_litellm_url(base_url, edit=True)
         fields = {
-            "model": model or DEFAULT_LITELLM_MODEL,
+            "model": model,
             "prompt": prompt,
             "n": "1",
             "size": size,
@@ -791,7 +839,7 @@ def _generate_litellm(
         url = _resolve_litellm_url(base_url, edit=False)
         payload = _build_litellm_generation_payload(
             prompt=prompt,
-            model=model or DEFAULT_LITELLM_MODEL,
+            model=model,
             size=size,
             quality=quality,
         )

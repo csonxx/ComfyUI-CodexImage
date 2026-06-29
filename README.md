@@ -66,7 +66,19 @@ export CODEX_IMAGE_OPENROUTER_MODEL="openai/gpt-image-2"
 
 export LITELLM_API_KEY="sk-..."
 export CODEX_IMAGE_LITELLM_BASE_URL="http://localhost:4000"
-export CODEX_IMAGE_LITELLM_MODEL="openrouter/openai/gpt-image-2"
+export CODEX_IMAGE_LITELLM_MODEL="gpt-image-2"
+```
+
+For backward compatibility, the LiteLLM node also normalizes old OpenRouter-style GPT Image aliases like `openrouter/gpt-image-2` and `openrouter/openai/gpt-image-2` to `gpt-image-2`.
+
+For Docker deployments, set these variables before starting ComfyUI. A later
+`docker exec` shell can show variables that the already-running ComfyUI process
+does not have. To check the process environment without printing the full key:
+
+```bash
+pid=$(pgrep -f "python.*main.py" | head -1)
+tr '\0' '\n' < /proc/$pid/environ | grep -E '^(OPENROUTER_API_KEY|CODEX_IMAGE_OPENROUTER_API_KEY)=' | wc -l
+tr '\0' '\n' < /proc/$pid/environ | sed -n -E 's/^(OPENROUTER_API_KEY|CODEX_IMAGE_OPENROUTER_API_KEY)=//p' | head -1 | awk '{print length($0), substr($0,1,8)}'
 ```
 
 The provider nodes support prompt-only generation. If you connect `image`, `image_2`, or `mask`, they send the request as an image edit/reference-image request when the provider endpoint supports it.
@@ -205,7 +217,7 @@ All read at import time:
 | `CODEX_IMAGE_OPENROUTER_MODEL` | `openai/gpt-image-2` | Default model for the OpenRouter node |
 | `CODEX_IMAGE_OPENROUTER_API_KEY` / `OPENROUTER_API_KEY` | _(empty)_ | OpenRouter API key |
 | `CODEX_IMAGE_LITELLM_BASE_URL` | `http://localhost:4000` | LiteLLM proxy base URL or images endpoint |
-| `CODEX_IMAGE_LITELLM_MODEL` | `openrouter/openai/gpt-image-2` | Default model for the LiteLLM node |
+| `CODEX_IMAGE_LITELLM_MODEL` | `gpt-image-2` | Default model for the LiteLLM node |
 | `CODEX_IMAGE_LITELLM_API_KEY` / `LITELLM_API_KEY` / `LITELLM_MASTER_KEY` | _(empty)_ | LiteLLM proxy API key |
 
 ---
@@ -250,7 +262,7 @@ python cli.py "a cat" --mode cli
 python cli.py "a cat" --mode openrouter --model openai/gpt-image-2
 
 # LiteLLM mode (uses LITELLM_API_KEY)
-python cli.py "a cat" --mode litellm --model openrouter/openai/gpt-image-2
+python cli.py "a cat" --mode litellm --model gpt-image-2
 
 # Specify output path
 python cli.py "a cat" --out ./output.png
