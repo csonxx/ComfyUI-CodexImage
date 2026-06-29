@@ -35,7 +35,7 @@ export CODEX_IMAGE_LITELLM_MODEL="gpt-image-2"
 
 `CODEX_IMAGE_OPENROUTER_MODEL` 和 `CODEX_IMAGE_LITELLM_MODEL` 只是默认值，节点上仍然可以手动填写模型名。
 
-为了兼容旧 workflow，LiteLLM 节点会把 `openrouter/gpt-image-2`、`openrouter/openai/gpt-image-2` 这类旧 OpenRouter 风格的 GPT Image 别名自动归一化成 `gpt-image-2`。
+LiteLLM 节点会原样发送节点里填写的 model 或 `CODEX_IMAGE_LITELLM_MODEL`，不会自动改写 provider 前缀。这里要填写你的 LiteLLM proxy 实际暴露的 model alias，例如 `gpt-image-2`、`openrouter/gpt-image-2`，或对应的 Vertex/Gemini alias。
 
 如果在 Docker 里排查 OpenRouter 401，不要只看 `docker exec` shell 的 `env`。要确认 ComfyUI 进程本身有 key：
 

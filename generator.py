@@ -252,8 +252,8 @@ def _augment_http_error_message(url: str, status: int, body_text: str) -> str:
         )
     if status == 403 and "key_model_access_denied" in lower_body:
         hints.append(
-            "LiteLLM rejected the model name for this key. Use one of the model "
-            "aliases allowed by the LiteLLM key; for this setup, try gpt-image-2."
+            "LiteLLM rejected the model name for this key. Use one of the exact "
+            "model aliases listed in the error response."
         )
     if not hints:
         return body_text
@@ -261,16 +261,11 @@ def _augment_http_error_message(url: str, status: int, body_text: str) -> str:
 
 
 def _normalize_litellm_model(model: str) -> str:
-    """Normalize old OpenRouter-style defaults to the LiteLLM model group name."""
+    """Resolve the LiteLLM model name without rewriting provider aliases."""
     model = (model or "").strip()
     if not model:
         return DEFAULT_LITELLM_MODEL
-
-    aliases = {
-        "openrouter/gpt-image-2": "gpt-image-2",
-        "openrouter/openai/gpt-image-2": "gpt-image-2",
-    }
-    return aliases.get(model.lower(), model)
+    return model
 
 
 def _post_streaming(url: str, token: str, payload: dict, timeout: int) -> list[dict]:

@@ -69,7 +69,7 @@ export CODEX_IMAGE_LITELLM_BASE_URL="http://localhost:4000"
 export CODEX_IMAGE_LITELLM_MODEL="gpt-image-2"
 ```
 
-For backward compatibility, the LiteLLM node also normalizes old OpenRouter-style GPT Image aliases like `openrouter/gpt-image-2` and `openrouter/openai/gpt-image-2` to `gpt-image-2`.
+The LiteLLM node sends the model string exactly as configured in the node or `CODEX_IMAGE_LITELLM_MODEL`. Use the model alias exposed by your LiteLLM proxy, for example `gpt-image-2`, `openrouter/gpt-image-2`, or a Vertex/Gemini alias depending on that proxy's configuration.
 
 For Docker deployments, set these variables before starting ComfyUI. A later
 `docker exec` shell can show variables that the already-running ComfyUI process

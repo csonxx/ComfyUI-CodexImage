@@ -67,7 +67,7 @@ export CODEX_IMAGE_LITELLM_BASE_URL="http://localhost:4000"
 export CODEX_IMAGE_LITELLM_MODEL="gpt-image-2"
 ```
 
-为了兼容旧 workflow，LiteLLM 节点会把 `openrouter/gpt-image-2`、`openrouter/openai/gpt-image-2` 这类旧 OpenRouter 风格的 GPT Image 别名自动归一化成 `gpt-image-2`。
+LiteLLM 节点会原样发送节点里填写的 model 或 `CODEX_IMAGE_LITELLM_MODEL`，不会自动改写 provider 前缀。这里要填写你的 LiteLLM proxy 实际暴露的 model alias，例如 `gpt-image-2`、`openrouter/gpt-image-2`，或对应的 Vertex/Gemini alias。
 
 Docker 部署时，这些环境变量需要在启动 ComfyUI 前注入。后续 `docker exec` 进入容器看到的 shell 环境变量，不一定等于已经运行中的 ComfyUI Python 进程环境。可以用下面命令检查进程环境，且不打印完整 key：
 
