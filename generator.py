@@ -705,6 +705,7 @@ def _build_openrouter_payload(
     model: str,
     size: str,
     quality: str,
+    fmt: str,
     input_image_urls: list[str] | None = None,
     background: str = "opaque",
 ) -> dict[str, Any]:
@@ -714,8 +715,12 @@ def _build_openrouter_payload(
         "prompt": prompt,
         "n": 1,
     }
+    if size:
+        payload["size"] = size
     if quality:
         payload["quality"] = quality
+    if fmt:
+        payload["output_format"] = fmt
     if background:
         payload["background"] = background
 
@@ -751,6 +756,7 @@ def _generate_openrouter(
         model=model or DEFAULT_OPENROUTER_MODEL,
         size=size,
         quality=quality,
+        fmt=fmt,
         input_image_urls=input_image_urls,
         background=background,
     )
