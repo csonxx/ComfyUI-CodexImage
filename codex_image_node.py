@@ -26,6 +26,8 @@ from generator import (
     DEFAULT_QUALITY,
     DEFAULT_FORMAT,
     DEFAULT_BASE_URL,
+    DEFAULT_OPENROUTER_MODEL,
+    DEFAULT_LITELLM_MODEL,
     SUPPORTED_SIZES,
     generate_image,
 )
@@ -130,6 +132,49 @@ def _image_tensor_and_mask_to_data_url(image: "torch.Tensor", mask: "torch.Tenso
     alpha = Image.eval(mask_l, lambda px: 255 - px)
     pil.putalpha(alpha)
     return _pil_to_png_data_url(pil)
+
+
+def _mask_tensor_to_transparent_data_url(mask: "torch.Tensor", size: tuple[int, int]) -> str:
+    """Convert ComfyUI MASK to an API mask PNG.
+
+    ComfyUI white mask pixels are edited. OpenAI-compatible image edit masks use
+    transparent pixels for areas to edit, so white becomes alpha=0.
+    """
+    mask_l = _mask_tensor_to_pil_l(mask, size)
+    alpha = Image.eval(mask_l, lambda px: 255 - px)
+    pil = Image.new("RGBA", size, (0, 0, 0, 255))
+    pil.putalpha(alpha)
+    return _pil_to_png_data_url(pil)
+
+
+def _write_output_copy(img_bytes: bytes, img_path: str, output_path: str, fmt: str) -> str:
+    if output_path:
+        out_dir = Path(output_path).expanduser()
+        out_dir.parent.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir.with_suffix(f".{fmt}")
+        out_path.write_bytes(img_bytes)
+        return str(out_path)
+    return img_path
+
+
+def _collect_reference_images(image=None, image_2=None, mask=None) -> tuple[list[str], str | None]:
+    """Build reference image data URLs and an optional OpenAI-compatible mask URL."""
+    input_image_urls: list[str] = []
+    mask_image_url = None
+
+    if image is None:
+        if mask is not None:
+            raise ValueError("mask requires image")
+    else:
+        input_image_urls.append(_image_tensor_to_data_url(image))
+        if mask is not None:
+            pil_size = _image_tensor_to_pil_rgb(image).size
+            mask_image_url = _mask_tensor_to_transparent_data_url(mask, pil_size)
+
+    if image_2 is not None:
+        input_image_urls.append(_image_tensor_to_data_url(image_2))
+
+    return input_image_urls, mask_image_url
 
 
 # ── ComfyUI Node ─────────────────────────────────────────────────────────────
@@ -307,6 +352,153 @@ class CodexImageI2INode:
         return (tensor, img_path)
 
 
+class OpenRouterImageNode:
+    """Generate or edit images through OpenRouter's dedicated Images API."""
+
+    CATEGORY = "image/generation"
+    FUNCTION = "generate"
+    RETURN_TYPES = ("IMAGE", "STRING")
+    RETURN_NAMES = ("image", "image_path")
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "prompt": ("STRING", {"multiline": True, "default": ""}),
+                "model": ("STRING", {"default": DEFAULT_OPENROUTER_MODEL}),
+                "size": (list(SUPPORTED_SIZES), {"default": DEFAULT_SIZE, "label": "size"}),
+                "quality": (["auto", "low", "medium", "high"], {"default": DEFAULT_QUALITY}),
+                "background": (["auto", "opaque"], {"default": "opaque"}),
+                "format": (["png", "jpeg", "webp"], {"default": DEFAULT_FORMAT}),
+            },
+            "optional": {
+                "image": ("IMAGE",),
+                "image_2": ("IMAGE",),
+                "mask": ("MASK",),
+                "output_path": ("STRING", {"default": "", "label": "output_path"}),
+            },
+        }
+
+    def generate(
+        self,
+        prompt: str,
+        model: str,
+        size: str,
+        quality: str,
+        background: str,
+        format: str,
+        image=None,
+        image_2=None,
+        mask=None,
+        output_path: str = "",
+    ) -> tuple:
+        if not prompt.strip():
+            raise ValueError("prompt cannot be empty")
+
+        if not _HAS_COMFYU:
+            raise RuntimeError("ComfyUI dependencies not available.")
+
+        edit_prompt = prompt
+        input_image_urls: list[str] = []
+        if image is None:
+            if mask is not None:
+                raise ValueError("mask requires image")
+        elif mask is not None:
+            input_image_urls.append(_image_tensor_and_mask_to_data_url(image, mask))
+            edit_prompt = (
+                f"{prompt}\n\n"
+                "Mask guidance: the first input image contains transparency derived "
+                "from the ComfyUI mask. Edit only the transparent/white-masked area "
+                "and preserve the opaque/black-masked area as much as possible."
+            )
+        else:
+            input_image_urls.append(_image_tensor_to_data_url(image))
+
+        if image_2 is not None:
+            input_image_urls.append(_image_tensor_to_data_url(image_2))
+
+        img_bytes, img_path = generate_image(
+            prompt=edit_prompt,
+            model=model,
+            size=size,
+            quality=quality,
+            fmt=format,
+            mode="openrouter",
+            input_image_urls=input_image_urls,
+            background=background,
+        )
+
+        tensor = _image_bytes_to_tensor(img_bytes)
+        img_path = _write_output_copy(img_bytes, img_path, output_path, format)
+        return (tensor, img_path)
+
+
+class LiteLLMImageNode:
+    """Generate or edit images through a LiteLLM OpenAI-compatible proxy."""
+
+    CATEGORY = "image/generation"
+    FUNCTION = "generate"
+    RETURN_TYPES = ("IMAGE", "STRING")
+    RETURN_NAMES = ("image", "image_path")
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "prompt": ("STRING", {"multiline": True, "default": ""}),
+                "model": ("STRING", {"default": DEFAULT_LITELLM_MODEL}),
+                "size": (list(SUPPORTED_SIZES), {"default": DEFAULT_SIZE, "label": "size"}),
+                "quality": (["auto", "low", "medium", "high"], {"default": DEFAULT_QUALITY}),
+                "format": (["png", "jpeg", "webp"], {"default": DEFAULT_FORMAT}),
+            },
+            "optional": {
+                "image": ("IMAGE",),
+                "image_2": ("IMAGE",),
+                "mask": ("MASK",),
+                "output_path": ("STRING", {"default": "", "label": "output_path"}),
+            },
+        }
+
+    def generate(
+        self,
+        prompt: str,
+        model: str,
+        size: str,
+        quality: str,
+        format: str,
+        image=None,
+        image_2=None,
+        mask=None,
+        output_path: str = "",
+    ) -> tuple:
+        if not prompt.strip():
+            raise ValueError("prompt cannot be empty")
+
+        if not _HAS_COMFYU:
+            raise RuntimeError("ComfyUI dependencies not available.")
+
+        input_image_urls, mask_image_url = _collect_reference_images(
+            image=image,
+            image_2=image_2,
+            mask=mask,
+        )
+
+        img_bytes, img_path = generate_image(
+            prompt=prompt,
+            model=model,
+            size=size,
+            quality=quality,
+            fmt=format,
+            mode="litellm",
+            input_image_urls=input_image_urls,
+            mask_image_url=mask_image_url,
+        )
+
+        tensor = _image_bytes_to_tensor(img_bytes)
+        img_path = _write_output_copy(img_bytes, img_path, output_path, format)
+        return (tensor, img_path)
+
+
 # ── Standalone CLI (uses generator.py directly — no torch needed) ─────────────
 
 if __name__ == "__main__":
@@ -318,8 +510,11 @@ if __name__ == "__main__":
     p.add_argument("--format", default=DEFAULT_FORMAT, choices=["png", "jpeg", "webp"])
     p.add_argument("--out", default="", help="Output file path")
     p.add_argument(
-        "--mode", default="auth", choices=["api", "auth", "cli"],
-        help="api: URL+key | auth: auto ~/.codex/auth.json | cli: codex exec"
+        "--mode", default="auth", choices=["api", "auth", "cli", "openrouter", "litellm"],
+        help=(
+            "api: URL+key | auth: auto ~/.codex/auth.json | cli: codex exec | "
+            "openrouter: OPENROUTER_API_KEY | litellm: LITELLM_API_KEY"
+        )
     )
     p.add_argument("--base-url", default=DEFAULT_BASE_URL)
     p.add_argument("--api-key", default="")

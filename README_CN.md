@@ -46,6 +46,29 @@ GPT Image 2 (gpt-5.5) 生图 ComfyUI 自定义节点，同时提供独立 CLI。
 | `auth` | 同样的 HTTP POST，但 credentials 自动从 `~/.codex/auth.json` 读取（零配置） |
 | `cli` | 启动 `codex exec` 子进程，认证逻辑完全由 codex CLI 处理 |
 
+## 额外 Provider 节点
+
+现在还提供两个独立 provider 节点：
+
+| 节点 | API 目标 | API Key |
+|------|----------|---------|
+| `OpenRouter Image (GPT Image 2)` | OpenRouter dedicated Images API | `CODEX_IMAGE_OPENROUTER_API_KEY` 或 `OPENROUTER_API_KEY` |
+| `LiteLLM Image (GPT Image 2)` | LiteLLM OpenAI-compatible `/v1/images/*` proxy | `CODEX_IMAGE_LITELLM_API_KEY`、`LITELLM_API_KEY` 或 `LITELLM_MASTER_KEY` |
+
+两个节点都可以直接在节点上填写 `model`。`api_key` 不进 UI，只读环境变量；`base_url` 也不进 UI，默认从环境变量读取：
+
+```bash
+export OPENROUTER_API_KEY="sk-or-..."
+export CODEX_IMAGE_OPENROUTER_BASE_URL="https://openrouter.ai/api/v1/images"
+export CODEX_IMAGE_OPENROUTER_MODEL="openai/gpt-image-2"
+
+export LITELLM_API_KEY="sk-..."
+export CODEX_IMAGE_LITELLM_BASE_URL="http://localhost:4000"
+export CODEX_IMAGE_LITELLM_MODEL="openrouter/openai/gpt-image-2"
+```
+
+这两个节点支持纯 prompt 生图。接入 `image`、`image_2` 或 `mask` 时，会按 provider 能力走图像编辑/参考图请求。
+
 ---
 
 ## 实现原理
@@ -174,6 +197,12 @@ to(dtype=torch.float32)   →  最终 tensor
 | `CODEX_IMAGE_SCRIPT` | `~/.codex-image/scripts/codex_image.py` | CLI 模式脚本路径 |
 | `OPENAI_API_KEY` | _(空)_ | 最高优先级认证覆盖 |
 | `CODEX_HOME` | `~/.codex` | Codex auth.json 目录 |
+| `CODEX_IMAGE_OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1/images` | OpenRouter Images API 端点 |
+| `CODEX_IMAGE_OPENROUTER_MODEL` | `openai/gpt-image-2` | OpenRouter 节点默认模型 |
+| `CODEX_IMAGE_OPENROUTER_API_KEY` / `OPENROUTER_API_KEY` | _(空)_ | OpenRouter API key |
+| `CODEX_IMAGE_LITELLM_BASE_URL` | `http://localhost:4000` | LiteLLM proxy base URL 或 images endpoint |
+| `CODEX_IMAGE_LITELLM_MODEL` | `openrouter/openai/gpt-image-2` | LiteLLM 节点默认模型 |
+| `CODEX_IMAGE_LITELLM_API_KEY` / `LITELLM_API_KEY` / `LITELLM_MASTER_KEY` | _(空)_ | LiteLLM proxy API key |
 
 ---
 
@@ -212,6 +241,12 @@ python cli.py "a cat" --mode api \
 
 # CLI 模式（通过 codex exec）
 python cli.py "a cat" --mode cli
+
+# OpenRouter 模式（使用 OPENROUTER_API_KEY）
+python cli.py "a cat" --mode openrouter --model openai/gpt-image-2
+
+# LiteLLM 模式（使用 LITELLM_API_KEY）
+python cli.py "a cat" --mode litellm --model openrouter/openai/gpt-image-2
 
 # 指定输出路径
 python cli.py "a cat" --out ./output.png

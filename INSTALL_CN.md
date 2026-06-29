@@ -8,12 +8,32 @@
 4. 在节点菜单里找到：
    - `Codex Image (GPT Image 2)`
    - `Codex Image I2I (GPT Image 2)`
+   - `OpenRouter Image (GPT Image 2)`
+   - `LiteLLM Image (GPT Image 2)`
 
 ## 认证
 
 节点默认使用 `auth` 模式，会读取当前用户的 `~/.codex/auth.json`。
 
 如果接收方没有 Codex 登录状态，可以改用 `api` 模式，并在隐藏输入里配置 `base_url` 和 `api_key`。
+
+OpenRouter 节点不在 UI 里填写 key，启动 ComfyUI 前设置环境变量：
+
+```bash
+export OPENROUTER_API_KEY="sk-or-..."
+export CODEX_IMAGE_OPENROUTER_BASE_URL="https://openrouter.ai/api/v1/images"
+export CODEX_IMAGE_OPENROUTER_MODEL="openai/gpt-image-2"
+```
+
+LiteLLM 节点同样通过环境变量配置：
+
+```bash
+export LITELLM_API_KEY="sk-..."
+export CODEX_IMAGE_LITELLM_BASE_URL="http://localhost:4000"
+export CODEX_IMAGE_LITELLM_MODEL="openrouter/openai/gpt-image-2"
+```
+
+`CODEX_IMAGE_OPENROUTER_MODEL` 和 `CODEX_IMAGE_LITELLM_MODEL` 只是默认值，节点上仍然可以手动填写模型名。
 
 ## I2I 和 Mask
 
@@ -22,6 +42,8 @@
 - `image`: 主输入图。
 - `image_2`: 可选第二参考图。
 - `mask`: 可选遮罩。
+
+`OpenRouter Image (GPT Image 2)` 和 `LiteLLM Image (GPT Image 2)` 也支持可选 `image` / `image_2` / `mask`。不接图片时就是纯 prompt 生图。
 
 Mask 规则：
 

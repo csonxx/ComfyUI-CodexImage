@@ -37,8 +37,11 @@ def main() -> int:
     p.add_argument("--format", default=DEFAULT_FORMAT, choices=["png", "jpeg", "webp"])
     p.add_argument("--out", default="", help="Output file path")
     p.add_argument(
-        "--mode", default="auth", choices=["api", "auth", "cli"],
-        help="api: URL+key | auth: auto ~/.codex/auth.json | cli: codex exec"
+        "--mode", default="auth", choices=["api", "auth", "cli", "openrouter", "litellm"],
+        help=(
+            "api: URL+key | auth: auto ~/.codex/auth.json | cli: codex exec | "
+            "openrouter: OPENROUTER_API_KEY | litellm: LITELLM_API_KEY"
+        )
     )
     p.add_argument("--base-url", default=DEFAULT_BASE_URL)
     p.add_argument("--api-key", default="")

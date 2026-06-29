@@ -44,6 +44,10 @@ DEFAULT_RETRY_MAX_SECONDS = float(os.environ.get("CODEX_IMAGE_RETRY_MAX_SECONDS"
 DEFAULT_RATE_LIMIT_FLOOR_SECONDS = float(os.environ.get("CODEX_IMAGE_RATE_LIMIT_FLOOR_SECONDS", "65"))
 DEFAULT_BASE_URL = os.environ.get("CODEX_IMAGE_BASE_URL", "https://chatgpt.com/backend-api/codex")
 DEFAULT_CODEX_SCRIPT = os.environ.get("CODEX_IMAGE_SCRIPT", "~/.codex-image/scripts/codex_image.py")
+DEFAULT_OPENROUTER_BASE_URL = os.environ.get("CODEX_IMAGE_OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1/images")
+DEFAULT_OPENROUTER_MODEL = os.environ.get("CODEX_IMAGE_OPENROUTER_MODEL", "openai/gpt-image-2")
+DEFAULT_LITELLM_BASE_URL = os.environ.get("CODEX_IMAGE_LITELLM_BASE_URL", "http://localhost:4000")
+DEFAULT_LITELLM_MODEL = os.environ.get("CODEX_IMAGE_LITELLM_MODEL", "openrouter/openai/gpt-image-2")
 
 # Supported image sizes for GPT Image 2
 SUPPORTED_SIZES = (
@@ -132,6 +136,99 @@ def _resolve_api_url(base_url: str) -> str:
         if "responses" not in base_url:
             base_url = f"{base_url}/responses"
     return base_url
+
+
+def _resolve_openrouter_url(base_url: str) -> str:
+    """Resolve OpenRouter base URL to its dedicated Image API endpoint."""
+    base_url = (base_url or "").strip() or DEFAULT_OPENROUTER_BASE_URL
+    base_url = base_url.rstrip("/")
+    if base_url.endswith("/api/v1/images"):
+        return base_url
+    if base_url.endswith("/api/v1"):
+        return f"{base_url}/images"
+    return f"{base_url}/api/v1/images"
+
+
+def _resolve_litellm_url(base_url: str, edit: bool = False) -> str:
+    """Resolve LiteLLM base URL to /v1/images/generations or /v1/images/edits."""
+    endpoint = "edits" if edit else "generations"
+    other_endpoint = "generations" if edit else "edits"
+    base_url = (base_url or "").strip() or DEFAULT_LITELLM_BASE_URL
+    base_url = base_url.rstrip("/")
+    if base_url.endswith(f"/v1/images/{endpoint}"):
+        return base_url
+    if base_url.endswith(f"/v1/images/{other_endpoint}"):
+        return base_url.rsplit("/", 1)[0] + f"/{endpoint}"
+    if base_url.endswith("/v1/images"):
+        return f"{base_url}/{endpoint}"
+    if base_url.endswith("/v1"):
+        return f"{base_url}/images/{endpoint}"
+    return f"{base_url}/v1/images/{endpoint}"
+
+
+def _resolve_env_api_key(api_key: str, env_names: tuple[str, ...], label: str) -> str:
+    """Resolve a provider API key from an explicit value or environment variables."""
+    if api_key and api_key.strip():
+        return api_key.strip()
+    for name in env_names:
+        value = os.environ.get(name, "").strip()
+        if value:
+            return value
+    names = " or ".join(env_names)
+    raise ValueError(f"{label} API key not found. Set {names}.")
+
+
+def _with_size_hint(prompt: str, size: str) -> str:
+    dim = SIZE_PATTERN.match(size or "")
+    if not dim:
+        return prompt
+    w, h = int(dim.group(1)), int(dim.group(2))
+    orient = "square" if w == h else ("landscape" if w > h else "portrait")
+    return f"{prompt}\n\nFinal output: {w}x{h} pixel {orient} canvas."
+
+
+def _image_extension_from_bytes(img_bytes: bytes, fallback: str) -> str:
+    fallback = (fallback or "png").lower().lstrip(".")
+    if img_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if img_bytes.startswith(b"\xff\xd8\xff"):
+        return "jpeg"
+    if img_bytes.startswith(b"RIFF") and img_bytes[8:12] == b"WEBP":
+        return "webp"
+    return fallback
+
+
+def _write_temp_image(img_bytes: bytes, fmt: str) -> str:
+    ext = _image_extension_from_bytes(img_bytes, fmt)
+    with tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False) as f:
+        f.write(img_bytes)
+        return f.name
+
+
+def _decode_data_url(data_url: str) -> tuple[bytes, str]:
+    match = re.match(r"^data:([^;,]+)?(;base64)?,(.*)$", data_url, re.S)
+    if not match:
+        raise ValueError("Invalid data URL")
+    media_type = match.group(1) or "application/octet-stream"
+    is_base64 = bool(match.group(2))
+    payload = match.group(3)
+    if is_base64:
+        return base64.b64decode(payload), media_type
+
+    from urllib.parse import unquote_to_bytes
+
+    return unquote_to_bytes(payload), media_type
+
+
+def _download_image_url(url: str, token: str = "") -> bytes:
+    from urllib import request
+
+    headers = {}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = request.Request(url, headers=headers, method="GET")
+    with request.urlopen(req, timeout=DEFAULT_TIMEOUT) as resp:
+        return resp.read()
 
 def _post_streaming(url: str, token: str, payload: dict, timeout: int) -> list[dict]:
     """POST JSON with SSE streaming, collect all data events."""
@@ -307,11 +404,7 @@ def _build_payload(
     actual_model = DEFAULT_MODEL if model.startswith("gpt-image") else model
     input_image_urls = input_image_urls or []
 
-    dim = SIZE_PATTERN.match(size)
-    if dim:
-        w, h = int(dim.group(1)), int(dim.group(2))
-        orient = "square" if w == h else ("landscape" if w > h else "portrait")
-        prompt = f"{prompt}\n\nFinal output: {w}x{h} pixel {orient} canvas."
+    prompt = _with_size_hint(prompt, size)
 
     tool = {"type": "image_generation", "size": size, "quality": quality}
     if input_image_urls:
@@ -413,12 +506,299 @@ def _generate_api(
 
     img_bytes = base64.b64decode(img_b64)
 
-    ext = f".{fmt}"
-    with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as f:
-        f.write(img_bytes)
-        tmp_path = f.name
+    return img_bytes, _write_temp_image(img_bytes, fmt)
 
-    return img_bytes, tmp_path
+
+# ── OpenRouter / LiteLLM image APIs ───────────────────────────────────────────
+
+def _post_json(
+    url: str,
+    token: str,
+    payload: dict[str, Any],
+    timeout: int,
+    extra_headers: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """POST JSON and return a parsed JSON response."""
+    from urllib import error, request
+
+    body = json.dumps(payload).encode("utf-8")
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    headers.update(extra_headers or {})
+
+    req = request.Request(url, data=body, headers=headers, method="POST")
+    try:
+        with request.urlopen(req, timeout=timeout) as resp:
+            text = resp.read().decode("utf-8", errors="replace")
+    except error.HTTPError as exc:
+        body_text = exc.read().decode("utf-8", errors="replace")
+        msg = f"POST {url} failed: status={exc.code}\n{body_text}"
+        _log_error(msg, exc)
+        if exc.code == 429:
+            raise CodexImageRateLimitError(msg, _parse_retry_after_seconds(body_text)) from exc
+        if exc.code >= 500:
+            raise CodexImageTransientAPIError(str(exc.code), msg) from exc
+        raise RuntimeError(msg) from exc
+    except error.URLError as exc:
+        msg = f"POST {url} failed: {exc}"
+        _log_error(msg, exc)
+        raise RuntimeError(msg) from exc
+
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"POST {url} returned non-JSON response:\n{text[:2000]}") from exc
+
+
+def _post_multipart(
+    url: str,
+    token: str,
+    fields: dict[str, str],
+    files: list[tuple[str, str, bytes, str]],
+    timeout: int,
+) -> dict[str, Any]:
+    """POST multipart/form-data and return a parsed JSON response.
+
+    files entries are: (field_name, filename, bytes, content_type).
+    """
+    from urllib import error, request
+    import uuid
+
+    boundary = f"----CodexImage{uuid.uuid4().hex}"
+    parts: list[bytes] = []
+
+    for name, value in fields.items():
+        parts.extend(
+            [
+                f"--{boundary}\r\n".encode("utf-8"),
+                f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode("utf-8"),
+                str(value).encode("utf-8"),
+                b"\r\n",
+            ]
+        )
+
+    for field_name, filename, content, content_type in files:
+        parts.extend(
+            [
+                f"--{boundary}\r\n".encode("utf-8"),
+                (
+                    f'Content-Disposition: form-data; name="{field_name}"; '
+                    f'filename="{filename}"\r\n'
+                ).encode("utf-8"),
+                f"Content-Type: {content_type or 'application/octet-stream'}\r\n\r\n".encode("utf-8"),
+                content,
+                b"\r\n",
+            ]
+        )
+
+    parts.append(f"--{boundary}--\r\n".encode("utf-8"))
+    body = b"".join(parts)
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": f"multipart/form-data; boundary={boundary}",
+    }
+    req = request.Request(url, data=body, headers=headers, method="POST")
+
+    try:
+        with request.urlopen(req, timeout=timeout) as resp:
+            text = resp.read().decode("utf-8", errors="replace")
+    except error.HTTPError as exc:
+        body_text = exc.read().decode("utf-8", errors="replace")
+        msg = f"POST {url} failed: status={exc.code}\n{body_text}"
+        _log_error(msg, exc)
+        if exc.code == 429:
+            raise CodexImageRateLimitError(msg, _parse_retry_after_seconds(body_text)) from exc
+        if exc.code >= 500:
+            raise CodexImageTransientAPIError(str(exc.code), msg) from exc
+        raise RuntimeError(msg) from exc
+    except error.URLError as exc:
+        msg = f"POST {url} failed: {exc}"
+        _log_error(msg, exc)
+        raise RuntimeError(msg) from exc
+
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"POST {url} returned non-JSON response:\n{text[:2000]}") from exc
+
+
+def _extract_image_bytes_from_images_response(response: dict[str, Any], token: str = "") -> bytes:
+    """Extract image bytes from OpenAI/OpenRouter-style Images API responses."""
+    data = response.get("data")
+    if not isinstance(data, list) or not data:
+        raise RuntimeError(
+            "No image data found in response:\n"
+            f"{json.dumps(response, ensure_ascii=False, indent=2)[:2000]}"
+        )
+
+    first = data[0]
+    if not isinstance(first, dict):
+        raise RuntimeError(f"Unexpected image response item: {first!r}")
+
+    b64_json = first.get("b64_json")
+    if b64_json:
+        return base64.b64decode(str(b64_json))
+
+    url = (first.get("url") or "").strip()
+    if url:
+        if url.startswith("data:"):
+            image_bytes, _ = _decode_data_url(url)
+            return image_bytes
+        return _download_image_url(url, token="")
+
+    raise RuntimeError(
+        "Image response item did not contain b64_json or url:\n"
+        f"{json.dumps(first, ensure_ascii=False, indent=2)[:2000]}"
+    )
+
+
+def _build_openrouter_payload(
+    prompt: str,
+    model: str,
+    size: str,
+    quality: str,
+    input_image_urls: list[str] | None = None,
+    background: str = "opaque",
+) -> dict[str, Any]:
+    prompt = _with_size_hint(prompt, size)
+    payload: dict[str, Any] = {
+        "model": model or DEFAULT_OPENROUTER_MODEL,
+        "prompt": prompt,
+        "n": 1,
+    }
+    if quality:
+        payload["quality"] = quality
+    if background:
+        payload["background"] = background
+
+    refs = []
+    for image_url in input_image_urls or []:
+        if image_url:
+            refs.append({"type": "image_url", "image_url": {"url": image_url}})
+    if refs:
+        payload["input_references"] = refs
+
+    return payload
+
+
+def _generate_openrouter(
+    prompt: str,
+    model: str,
+    size: str,
+    quality: str,
+    fmt: str,
+    base_url: str,
+    api_key: str,
+    input_image_urls: list[str] | None = None,
+    background: str = "opaque",
+) -> tuple[bytes, str]:
+    url = _resolve_openrouter_url(base_url)
+    token = _resolve_env_api_key(
+        api_key,
+        ("CODEX_IMAGE_OPENROUTER_API_KEY", "OPENROUTER_API_KEY"),
+        "OpenRouter",
+    )
+    payload = _build_openrouter_payload(
+        prompt=prompt,
+        model=model or DEFAULT_OPENROUTER_MODEL,
+        size=size,
+        quality=quality,
+        input_image_urls=input_image_urls,
+        background=background,
+    )
+    extra_headers = {}
+    referer = os.environ.get("OPENROUTER_HTTP_REFERER", "").strip()
+    if referer:
+        extra_headers["HTTP-Referer"] = referer
+    title = os.environ.get("OPENROUTER_X_TITLE", "").strip()
+    if title:
+        extra_headers["X-Title"] = title
+    response = _post_json(url, token, payload, DEFAULT_TIMEOUT, extra_headers=extra_headers)
+    img_bytes = _extract_image_bytes_from_images_response(response, token)
+    return img_bytes, _write_temp_image(img_bytes, fmt)
+
+
+def _build_litellm_generation_payload(
+    prompt: str,
+    model: str,
+    size: str,
+    quality: str,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "model": model or DEFAULT_LITELLM_MODEL,
+        "prompt": _with_size_hint(prompt, size),
+        "n": 1,
+        "size": size,
+    }
+    if quality:
+        payload["quality"] = quality
+    return payload
+
+
+def _data_urls_to_multipart_files(
+    input_image_urls: list[str],
+    mask_image_url: str | None = None,
+) -> list[tuple[str, str, bytes, str]]:
+    files: list[tuple[str, str, bytes, str]] = []
+    for idx, image_url in enumerate(input_image_urls):
+        if not image_url:
+            continue
+        image_bytes, media_type = _decode_data_url(image_url)
+        ext = "png" if media_type.endswith("png") else "jpg"
+        files.append(("image", f"image_{idx}.{ext}", image_bytes, media_type))
+
+    if mask_image_url:
+        mask_bytes, media_type = _decode_data_url(mask_image_url)
+        ext = "png" if media_type.endswith("png") else "jpg"
+        files.append(("mask", f"mask.{ext}", mask_bytes, media_type))
+
+    return files
+
+
+def _generate_litellm(
+    prompt: str,
+    model: str,
+    size: str,
+    quality: str,
+    fmt: str,
+    base_url: str,
+    api_key: str,
+    input_image_urls: list[str] | None = None,
+    mask_image_url: str | None = None,
+) -> tuple[bytes, str]:
+    token = _resolve_env_api_key(
+        api_key,
+        ("CODEX_IMAGE_LITELLM_API_KEY", "LITELLM_API_KEY", "LITELLM_MASTER_KEY"),
+        "LiteLLM",
+    )
+
+    input_image_urls = input_image_urls or []
+    if input_image_urls:
+        url = _resolve_litellm_url(base_url, edit=True)
+        fields = {
+            "model": model or DEFAULT_LITELLM_MODEL,
+            "prompt": prompt,
+            "n": "1",
+            "size": size,
+        }
+        if quality:
+            fields["quality"] = quality
+        files = _data_urls_to_multipart_files(input_image_urls, mask_image_url)
+        response = _post_multipart(url, token, fields, files, DEFAULT_TIMEOUT)
+    else:
+        url = _resolve_litellm_url(base_url, edit=False)
+        payload = _build_litellm_generation_payload(
+            prompt=prompt,
+            model=model or DEFAULT_LITELLM_MODEL,
+            size=size,
+            quality=quality,
+        )
+        response = _post_json(url, token, payload, DEFAULT_TIMEOUT)
+
+    img_bytes = _extract_image_bytes_from_images_response(response, token)
+    return img_bytes, _write_temp_image(img_bytes, fmt)
 
 
 # ── CLI mode ─────────────────────────────────────────────────────────────────
@@ -516,12 +896,14 @@ def generate_image(
     size: str = DEFAULT_SIZE,
     quality: str = DEFAULT_QUALITY,
     fmt: str = DEFAULT_FORMAT,
-    mode: Literal["api", "auth", "cli"] = "auth",
+    mode: Literal["api", "auth", "cli", "openrouter", "litellm"] = "auth",
     base_url: str = DEFAULT_BASE_URL,
     api_key: str = "",
     codex_cmd: str = "codex exec -- sh -c {CMD}",
     input_image_urls: list[str] | None = None,
+    mask_image_url: str | None = None,
     action: str = "auto",
+    background: str = "opaque",
 ) -> tuple[bytes, str]:
     """Generate an image.
 
@@ -531,7 +913,8 @@ def generate_image(
         size:      Dimensions (default: "1024x1024")
         quality:   "low" | "medium" | "high" (default: "medium")
         fmt:       "png" | "jpeg" | "webp" (default: "png")
-        mode:      "api" (user URL+key) | "auth" (auto from ~/.codex/auth.json) | "cli" (codex exec)
+        mode:      "api" (user URL+key) | "auth" (auto from ~/.codex/auth.json)
+                   | "cli" (codex exec) | "openrouter" | "litellm"
         base_url:  API base URL (mode "api" only)
         api_key:   Bearer token (mode "api": required; mode "auth": ignored)
         codex_cmd: codex exec command template (mode "cli" only, {CMD} is replaced)
@@ -544,7 +927,7 @@ def generate_image(
 
     if mode == "cli":
         if input_image_urls:
-            raise ValueError("image input is only supported in api/auth mode")
+            raise ValueError("image input is not supported in cli mode")
         return _generate_cli(
             prompt=prompt,
             model=model,
@@ -552,6 +935,34 @@ def generate_image(
             quality=quality,
             fmt=fmt,
             codex_cmd=codex_cmd,
+        )
+    if mode == "openrouter":
+        provider_base_url = "" if base_url == DEFAULT_BASE_URL else base_url
+        provider_model = DEFAULT_OPENROUTER_MODEL if not model or model == DEFAULT_MODEL else model
+        return _generate_openrouter(
+            prompt=prompt,
+            model=provider_model,
+            size=size,
+            quality=quality,
+            fmt=fmt,
+            base_url=provider_base_url,
+            api_key=api_key,
+            input_image_urls=input_image_urls,
+            background=background,
+        )
+    if mode == "litellm":
+        provider_base_url = "" if base_url == DEFAULT_BASE_URL else base_url
+        provider_model = DEFAULT_LITELLM_MODEL if not model or model == DEFAULT_MODEL else model
+        return _generate_litellm(
+            prompt=prompt,
+            model=provider_model,
+            size=size,
+            quality=quality,
+            fmt=fmt,
+            base_url=provider_base_url,
+            api_key=api_key,
+            input_image_urls=input_image_urls,
+            mask_image_url=mask_image_url,
         )
     else:
         # "api" or "auth": use direct HTTP

@@ -48,6 +48,29 @@ The key design goal: **reuse your existing Codex/ChatGPT authentication** — no
 | `auth` | Same HTTP POST, but credentials are auto-loaded from `~/.codex/auth.json` (zero config needed) |
 | `cli` | Spawns `codex exec` as a subprocess; the codex CLI handles auth internally |
 
+## Additional Provider Nodes
+
+This package also provides two separate provider nodes:
+
+| Node | API target | API key |
+|------|------------|---------|
+| `OpenRouter Image (GPT Image 2)` | OpenRouter dedicated Images API | `CODEX_IMAGE_OPENROUTER_API_KEY` or `OPENROUTER_API_KEY` |
+| `LiteLLM Image (GPT Image 2)` | LiteLLM OpenAI-compatible `/v1/images/*` proxy | `CODEX_IMAGE_LITELLM_API_KEY`, `LITELLM_API_KEY`, or `LITELLM_MASTER_KEY` |
+
+Both nodes let you enter the `model` name directly in the node. `base_url` is not shown in the UI; it defaults from environment variables:
+
+```bash
+export OPENROUTER_API_KEY="sk-or-..."
+export CODEX_IMAGE_OPENROUTER_BASE_URL="https://openrouter.ai/api/v1/images"
+export CODEX_IMAGE_OPENROUTER_MODEL="openai/gpt-image-2"
+
+export LITELLM_API_KEY="sk-..."
+export CODEX_IMAGE_LITELLM_BASE_URL="http://localhost:4000"
+export CODEX_IMAGE_LITELLM_MODEL="openrouter/openai/gpt-image-2"
+```
+
+The provider nodes support prompt-only generation. If you connect `image`, `image_2`, or `mask`, they send the request as an image edit/reference-image request when the provider endpoint supports it.
+
 ---
 
 ## Implementation Principles
@@ -178,6 +201,12 @@ All read at import time:
 | `CODEX_IMAGE_SCRIPT` | `~/.codex-image/scripts/codex_image.py` | CLI mode script path |
 | `OPENAI_API_KEY` | _(empty)_ | Overrides all auth (highest priority) |
 | `CODEX_HOME` | `~/.codex` | Codex auth directory |
+| `CODEX_IMAGE_OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1/images` | OpenRouter Images API endpoint |
+| `CODEX_IMAGE_OPENROUTER_MODEL` | `openai/gpt-image-2` | Default model for the OpenRouter node |
+| `CODEX_IMAGE_OPENROUTER_API_KEY` / `OPENROUTER_API_KEY` | _(empty)_ | OpenRouter API key |
+| `CODEX_IMAGE_LITELLM_BASE_URL` | `http://localhost:4000` | LiteLLM proxy base URL or images endpoint |
+| `CODEX_IMAGE_LITELLM_MODEL` | `openrouter/openai/gpt-image-2` | Default model for the LiteLLM node |
+| `CODEX_IMAGE_LITELLM_API_KEY` / `LITELLM_API_KEY` / `LITELLM_MASTER_KEY` | _(empty)_ | LiteLLM proxy API key |
 
 ---
 
@@ -216,6 +245,12 @@ python cli.py "a cat" --mode api \
 
 # CLI mode (via codex exec)
 python cli.py "a cat" --mode cli
+
+# OpenRouter mode (uses OPENROUTER_API_KEY)
+python cli.py "a cat" --mode openrouter --model openai/gpt-image-2
+
+# LiteLLM mode (uses LITELLM_API_KEY)
+python cli.py "a cat" --mode litellm --model openrouter/openai/gpt-image-2
 
 # Specify output path
 python cli.py "a cat" --out ./output.png
