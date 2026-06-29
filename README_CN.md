@@ -67,7 +67,7 @@ export CODEX_IMAGE_LITELLM_BASE_URL="http://localhost:4000"
 export CODEX_IMAGE_LITELLM_MODEL="gpt-image-2"
 ```
 
-LiteLLM 节点会原样发送节点里填写的 model 或 `CODEX_IMAGE_LITELLM_MODEL`，不会自动改写 provider 前缀。这里要填写你的 LiteLLM proxy 实际暴露的 model alias，例如 `gpt-image-2`、`openrouter/gpt-image-2`，或对应的 Vertex/Gemini alias。
+Provider 节点会原样发送节点里填写的 model 或对应环境变量默认值，不会自动改写 provider 前缀。这里要填写你的 provider 实际暴露的 model alias，例如 `openai/gpt-image-2`、`gpt-image-2`、`openrouter/gpt-image-2`，或对应的 Vertex/Gemini alias。
 
 Docker 部署时，这些环境变量需要在启动 ComfyUI 前注入。后续 `docker exec` 进入容器看到的 shell 环境变量，不一定等于已经运行中的 ComfyUI Python 进程环境。可以用下面命令检查进程环境，且不打印完整 key：
 
@@ -77,7 +77,7 @@ tr '\0' '\n' < /proc/$pid/environ | grep -E '^(OPENROUTER_API_KEY|CODEX_IMAGE_OP
 tr '\0' '\n' < /proc/$pid/environ | sed -n -E 's/^(OPENROUTER_API_KEY|CODEX_IMAGE_OPENROUTER_API_KEY)=//p' | head -1 | awk '{print length($0), substr($0,1,8)}'
 ```
 
-这两个节点支持纯 prompt 生图。接入 `image`、`image_2` 或 `mask` 时，会按 provider 能力走图像编辑/参考图请求。
+这两个节点支持纯 prompt 生图。接入 `image`、`image_2` 或 `mask` 时，会按 provider 能力走图像编辑/参考图请求。prompt 文本会按输入原样发送；尺寸、质量、mask 通过 API 字段或图片 alpha/multipart 数据表达，不再拼接到 prompt 文本里。
 
 ---
 
@@ -222,10 +222,10 @@ to(dtype=torch.float32)   →  最终 tensor
 |------|--------|------|
 | `mode` | `auth` | `api` / `auth` / `cli` |
 | `prompt` | — | 图片描述（必填） |
-| `model` | `gpt-5.5` | 模型名 |
+| `model` | 按模式默认 | 模型名。CLI 里空值会使用所选模式的默认模型。 |
 | `size` | `1024x1024` | `1024x1024` / `1536x1024` / `1024x1536` / `1792x1024` / `1024x1792` / `1920x1080` / `1080x1920` / `2048x2048` / `3840x2160` / `2160x3840` |
 | `quality` | `medium` | `low` / `medium` / `high` |
-| `format` | `png` | `png` / `jpeg` / `webp` |
+| `format` | `png` | `png` / `jpeg` / `webp`；会传给支持该字段的 provider。保存路径会优先使用实际返回图片类型。 |
 | `output_path` | _(空)_ | 保存副本到指定路径 |
 
 **隐藏字段（ComfyUI UI 不显示）：**

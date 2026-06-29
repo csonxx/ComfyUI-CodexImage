@@ -151,7 +151,8 @@ def _write_output_copy(img_bytes: bytes, img_path: str, output_path: str, fmt: s
     if output_path:
         out_dir = Path(output_path).expanduser()
         out_dir.parent.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir.with_suffix(f".{fmt}")
+        suffix = Path(img_path).suffix or f".{fmt}"
+        out_path = out_dir.with_suffix(suffix)
         out_path.write_bytes(img_bytes)
         return str(out_path)
     return img_path
@@ -251,12 +252,7 @@ class CodexImageNode:
 
         tensor = _image_bytes_to_tensor(img_bytes)
 
-        if output_path:
-            out_dir = Path(output_path).expanduser()
-            out_dir.parent.mkdir(parents=True, exist_ok=True)
-            out_path = out_dir.with_suffix(f".{format}")
-            out_path.write_bytes(img_bytes)
-            img_path = str(out_path)
+        img_path = _write_output_copy(img_bytes, img_path, output_path, format)
 
         return (tensor, img_path)
 
@@ -313,22 +309,15 @@ class CodexImageI2INode:
         if not _HAS_COMFYU:
             raise RuntimeError("ComfyUI dependencies not available.")
 
-        edit_prompt = prompt
         if mask is not None:
             input_image_urls = [_image_tensor_and_mask_to_data_url(image, mask)]
-            edit_prompt = (
-                f"{prompt}\n\n"
-                "Mask guidance: the first input image contains transparency derived "
-                "from the ComfyUI mask. Edit only the transparent/white-masked area "
-                "and preserve the opaque/black-masked area as much as possible."
-            )
         else:
             input_image_urls = [_image_tensor_to_data_url(image)]
         if image_2 is not None:
             input_image_urls.append(_image_tensor_to_data_url(image_2))
 
         img_bytes, img_path = generate_image(
-            prompt=edit_prompt,
+            prompt=prompt,
             model=model,
             size=size,
             quality=quality,
@@ -342,12 +331,7 @@ class CodexImageI2INode:
 
         tensor = _image_bytes_to_tensor(img_bytes)
 
-        if output_path:
-            out_dir = Path(output_path).expanduser()
-            out_dir.parent.mkdir(parents=True, exist_ok=True)
-            out_path = out_dir.with_suffix(f".{format}")
-            out_path.write_bytes(img_bytes)
-            img_path = str(out_path)
+        img_path = _write_output_copy(img_bytes, img_path, output_path, format)
 
         return (tensor, img_path)
 
@@ -398,19 +382,12 @@ class OpenRouterImageNode:
         if not _HAS_COMFYU:
             raise RuntimeError("ComfyUI dependencies not available.")
 
-        edit_prompt = prompt
         input_image_urls: list[str] = []
         if image is None:
             if mask is not None:
                 raise ValueError("mask requires image")
         elif mask is not None:
             input_image_urls.append(_image_tensor_and_mask_to_data_url(image, mask))
-            edit_prompt = (
-                f"{prompt}\n\n"
-                "Mask guidance: the first input image contains transparency derived "
-                "from the ComfyUI mask. Edit only the transparent/white-masked area "
-                "and preserve the opaque/black-masked area as much as possible."
-            )
         else:
             input_image_urls.append(_image_tensor_to_data_url(image))
 
@@ -418,7 +395,7 @@ class OpenRouterImageNode:
             input_image_urls.append(_image_tensor_to_data_url(image_2))
 
         img_bytes, img_path = generate_image(
-            prompt=edit_prompt,
+            prompt=prompt,
             model=model,
             size=size,
             quality=quality,
@@ -504,7 +481,7 @@ class LiteLLMImageNode:
 if __name__ == "__main__":
     p = argparse.ArgumentParser(description="CodexImage standalone generator")
     p.add_argument("prompt", help="Image description")
-    p.add_argument("--model", default=DEFAULT_MODEL)
+    p.add_argument("--model", default="")
     p.add_argument("--size", default=DEFAULT_SIZE)
     p.add_argument("--quality", default=DEFAULT_QUALITY, choices=["low", "medium", "high"])
     p.add_argument("--format", default=DEFAULT_FORMAT, choices=["png", "jpeg", "webp"])

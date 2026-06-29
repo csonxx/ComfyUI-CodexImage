@@ -63,9 +63,6 @@ SUPPORTED_SIZES = (
     "2160x3840",    # 4K 9:16
 )
 
-# Regex for validating arbitrary size strings (kept for reference)
-SIZE_PATTERN = re.compile(r"^\s*(\d+)\s*[xX×]\s*(\d+)\s*$")
-
 # ── Auth ─────────────────────────────────────────────────────────────────────
 
 def _load_auth_from_codex_home() -> str:
@@ -184,15 +181,6 @@ def _normalize_bearer_token(value: str) -> str:
     if token.lower().startswith("bearer "):
         return token[7:].strip()
     return token
-
-
-def _with_size_hint(prompt: str, size: str) -> str:
-    dim = SIZE_PATTERN.match(size or "")
-    if not dim:
-        return prompt
-    w, h = int(dim.group(1)), int(dim.group(2))
-    orient = "square" if w == h else ("landscape" if w > h else "portrait")
-    return f"{prompt}\n\nFinal output: {w}x{h} pixel {orient} canvas."
 
 
 def _image_extension_from_bytes(img_bytes: bytes, fallback: str) -> str:
@@ -440,10 +428,8 @@ def _build_payload(
     action: str = "auto",
 ) -> dict[str, Any]:
     """Build the request body for the Codex Responses API."""
-    actual_model = DEFAULT_MODEL if model.startswith("gpt-image") else model
+    actual_model = (model or "").strip() or DEFAULT_MODEL
     input_image_urls = input_image_urls or []
-
-    prompt = _with_size_hint(prompt, size)
 
     tool = {"type": "image_generation", "size": size, "quality": quality}
     if input_image_urls:
@@ -704,7 +690,6 @@ def _build_openrouter_payload(
     input_image_urls: list[str] | None = None,
     background: str = "opaque",
 ) -> dict[str, Any]:
-    prompt = _with_size_hint(prompt, size)
     payload: dict[str, Any] = {
         "model": model or DEFAULT_OPENROUTER_MODEL,
         "prompt": prompt,
@@ -776,7 +761,7 @@ def _build_litellm_generation_payload(
     model = _normalize_litellm_model(model)
     payload: dict[str, Any] = {
         "model": model,
-        "prompt": _with_size_hint(prompt, size),
+        "prompt": prompt,
         "n": 1,
         "size": size,
     }
@@ -941,7 +926,7 @@ def _generate_cli(
 
 def generate_image(
     prompt: str,
-    model: str = DEFAULT_MODEL,
+    model: str = "",
     size: str = DEFAULT_SIZE,
     quality: str = DEFAULT_QUALITY,
     fmt: str = DEFAULT_FORMAT,
@@ -958,7 +943,7 @@ def generate_image(
 
     Args:
         prompt:    Image description (required)
-        model:     Model name (default: "gpt-5.5")
+        model:     Model name. Empty uses the default for the selected mode.
         size:      Dimensions (default: "1024x1024")
         quality:   "low" | "medium" | "high" (default: "medium")
         fmt:       "png" | "jpeg" | "webp" (default: "png")
@@ -979,7 +964,7 @@ def generate_image(
             raise ValueError("image input is not supported in cli mode")
         return _generate_cli(
             prompt=prompt,
-            model=model,
+            model=(model or "").strip() or DEFAULT_MODEL,
             size=size,
             quality=quality,
             fmt=fmt,
@@ -987,7 +972,7 @@ def generate_image(
         )
     if mode == "openrouter":
         provider_base_url = "" if base_url == DEFAULT_BASE_URL else base_url
-        provider_model = DEFAULT_OPENROUTER_MODEL if not model or model == DEFAULT_MODEL else model
+        provider_model = (model or "").strip() or DEFAULT_OPENROUTER_MODEL
         return _generate_openrouter(
             prompt=prompt,
             model=provider_model,
@@ -1001,7 +986,7 @@ def generate_image(
         )
     if mode == "litellm":
         provider_base_url = "" if base_url == DEFAULT_BASE_URL else base_url
-        provider_model = DEFAULT_LITELLM_MODEL if not model or model == DEFAULT_MODEL else model
+        provider_model = (model or "").strip() or DEFAULT_LITELLM_MODEL
         return _generate_litellm(
             prompt=prompt,
             model=provider_model,
@@ -1018,7 +1003,7 @@ def generate_image(
         resolved_key = "" if mode == "auth" else api_key
         return _generate_api(
             prompt=prompt,
-            model=model,
+            model=(model or "").strip() or DEFAULT_MODEL,
             size=size,
             quality=quality,
             fmt=fmt,

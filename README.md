@@ -69,7 +69,7 @@ export CODEX_IMAGE_LITELLM_BASE_URL="http://localhost:4000"
 export CODEX_IMAGE_LITELLM_MODEL="gpt-image-2"
 ```
 
-The LiteLLM node sends the model string exactly as configured in the node or `CODEX_IMAGE_LITELLM_MODEL`. Use the model alias exposed by your LiteLLM proxy, for example `gpt-image-2`, `openrouter/gpt-image-2`, or a Vertex/Gemini alias depending on that proxy's configuration.
+Provider nodes send the `model` string exactly as configured in the node or the matching environment default. Use the model alias exposed by your provider, for example `openai/gpt-image-2`, `gpt-image-2`, `openrouter/gpt-image-2`, or a Vertex/Gemini alias depending on your proxy's configuration.
 
 For Docker deployments, set these variables before starting ComfyUI. A later
 `docker exec` shell can show variables that the already-running ComfyUI process
@@ -81,7 +81,7 @@ tr '\0' '\n' < /proc/$pid/environ | grep -E '^(OPENROUTER_API_KEY|CODEX_IMAGE_OP
 tr '\0' '\n' < /proc/$pid/environ | sed -n -E 's/^(OPENROUTER_API_KEY|CODEX_IMAGE_OPENROUTER_API_KEY)=//p' | head -1 | awk '{print length($0), substr($0,1,8)}'
 ```
 
-The provider nodes support prompt-only generation. If you connect `image`, `image_2`, or `mask`, they send the request as an image edit/reference-image request when the provider endpoint supports it.
+The provider nodes support prompt-only generation. If you connect `image`, `image_2`, or `mask`, they send the request as an image edit/reference-image request when the provider endpoint supports it. The prompt text is sent as entered; size, quality, and mask are represented through API fields or image alpha/multipart data instead of prompt text.
 
 ---
 
@@ -228,10 +228,10 @@ All read at import time:
 |-------|---------|-------------|
 | `mode` | `auth` | `api` / `auth` / `cli` |
 | `prompt` | — | Image description (required) |
-| `model` | `gpt-5.5` | Model name |
+| `model` | mode-specific | Model name. Empty CLI value uses the selected mode's default. |
 | `size` | `1024x1024` | `1024x1024` / `1536x1024` / `1024x1536` / `1792x1024` / `1024x1792` / `1920x1080` / `1080x1920` / `2048x2048` / `3840x2160` / `2160x3840` |
 | `quality` | `medium` | `low` / `medium` / `high` |
-| `format` | `png` | `png` / `jpeg` / `webp` |
+| `format` | `png` | `png` / `jpeg` / `webp`; passed to providers that support it. Saved output paths use the actual returned image type when it can be detected. |
 | `output_path` | _(empty)_ | Save a copy to this path |
 
 **Hidden params:**

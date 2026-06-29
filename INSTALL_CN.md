@@ -35,7 +35,7 @@ export CODEX_IMAGE_LITELLM_MODEL="gpt-image-2"
 
 `CODEX_IMAGE_OPENROUTER_MODEL` 和 `CODEX_IMAGE_LITELLM_MODEL` 只是默认值，节点上仍然可以手动填写模型名。
 
-LiteLLM 节点会原样发送节点里填写的 model 或 `CODEX_IMAGE_LITELLM_MODEL`，不会自动改写 provider 前缀。这里要填写你的 LiteLLM proxy 实际暴露的 model alias，例如 `gpt-image-2`、`openrouter/gpt-image-2`，或对应的 Vertex/Gemini alias。
+Provider 节点会原样发送节点里填写的 model 或对应环境变量默认值，不会自动改写 provider 前缀。这里要填写你的 provider 实际暴露的 model alias，例如 `openai/gpt-image-2`、`gpt-image-2`、`openrouter/gpt-image-2`，或对应的 Vertex/Gemini alias。
 
 如果在 Docker 里排查 OpenRouter 401，不要只看 `docker exec` shell 的 `env`。要确认 ComfyUI 进程本身有 key：
 
@@ -60,7 +60,7 @@ Mask 规则：
 - 白色区域：编辑或重绘。
 - 黑色区域：尽量保留。
 
-使用 mask 时，节点会把白色遮罩区域转换成透明区域发给图像编辑接口。
+使用 mask 时，节点会把白色遮罩区域转换成透明区域发给图像编辑接口，不会额外拼接 mask 说明到 prompt 文本。
 
 ## 依赖
 
