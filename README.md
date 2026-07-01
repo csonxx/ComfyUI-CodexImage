@@ -57,9 +57,11 @@ This package also provides separate provider nodes:
 | `OpenRouter Image (GPT Image 2)` | OpenRouter dedicated Images API | `CODEX_IMAGE_OPENROUTER_API_KEY` or `OPENROUTER_API_KEY` |
 | `Mix Codex Copycat Image I2I (GPT Image 2)` | Codex-style I2I packing, then Responses API tool call through OpenRouter or LiteLLM selected by `mode` | OpenRouter or LiteLLM environment variables |
 | `GPT-Image-2 Response i2i` | Codex-style I2I packing, then native Responses `image_generation` + `action=edit` through OpenRouter or LiteLLM selected by `mode` | OpenRouter or LiteLLM environment variables |
+| `Requesty I2I (gpt-image-2 edit)` | Requesty OpenAI-compatible `/v1/images/edits` multipart edit route | Optional node `api_key`, then `REQUESTY_API_KEY` |
+| `WaveSpeed I2I (gpt-image-2 edit)` | WaveSpeed `openai/gpt-image-2/edit` prediction API | Optional node `api_key`, then `CODEX_IMAGE_WAVESPEED_API_KEY` or `WAVESPEED_API_KEY` |
 | `LiteLLM Image (GPT Image 2)` | LiteLLM OpenAI-compatible `/v1/images/*` proxy | `CODEX_IMAGE_LITELLM_API_KEY`, `LITELLM_API_KEY`, or `LITELLM_MASTER_KEY` |
 
-Provider nodes let you enter the `model` name directly in the node. `base_url` is not shown in the UI; it defaults from environment variables:
+Provider nodes let you enter the `model` name directly in the node. `base_url` is not shown in the UI; it defaults from environment variables. Requesty and WaveSpeed also expose an optional node-level `api_key` field for one-off use:
 
 ```bash
 export OPENROUTER_API_KEY="sk-or-..."
@@ -71,6 +73,14 @@ export CODEX_IMAGE_OPENROUTER_IMAGE_MODEL="openai/gpt-image-2"
 export LITELLM_API_KEY="sk-..."
 export CODEX_IMAGE_LITELLM_BASE_URL="http://localhost:4000"
 export CODEX_IMAGE_LITELLM_MODEL="gpt-image-2"
+
+export REQUESTY_API_KEY="sk-..."
+export CODEX_IMAGE_REQUESTY_BASE_URL="https://router.requesty.ai/v1"
+export CODEX_IMAGE_REQUESTY_MODEL="azure/openai/gpt-image-2"
+
+export WAVESPEED_API_KEY="ws_..."
+export CODEX_IMAGE_WAVESPEED_BASE_URL="https://api.wavespeed.ai/api/v3"
+export CODEX_IMAGE_WAVESPEED_MODEL="openai/gpt-image-2/edit"
 ```
 
 Provider nodes send the `model` string exactly as configured in the node or the matching environment default. Use the model alias exposed by your provider, for example `openai/gpt-image-2`, `gpt-image-2`, `openrouter/gpt-image-2`, or a Vertex/Gemini alias depending on your proxy's configuration.
@@ -85,11 +95,15 @@ tr '\0' '\n' < /proc/$pid/environ | grep -E '^(OPENROUTER_API_KEY|CODEX_IMAGE_OP
 tr '\0' '\n' < /proc/$pid/environ | sed -n -E 's/^(OPENROUTER_API_KEY|CODEX_IMAGE_OPENROUTER_API_KEY)=//p' | head -1 | awk '{print length($0), substr($0,1,8)}'
 ```
 
-The provider nodes support prompt-only generation. If you connect `image`, `image_2`, or `mask`, they send the request as an image edit/reference-image request when the provider endpoint supports it. The prompt text is sent as entered; size, quality, and mask are represented through API fields or image alpha/multipart data instead of prompt text.
+The OpenRouter and LiteLLM provider nodes support prompt-only generation. If you connect `image`, `image_2`, or `mask`, they send the request as an image edit/reference-image request when the provider endpoint supports it. The prompt text is sent as entered; size, quality, and mask are represented through API fields or image alpha/multipart data instead of prompt text.
 
 `Mix Codex Copycat Image I2I (GPT Image 2)` is image-input-only and mirrors `Codex Image I2I (GPT Image 2)` reference packing: the main image is always sent, `image_2` is a second reference, and a ComfyUI `mask` is baked into the first image alpha channel. Its `mode` selects `openrouter` or `litellm`, using the same environment-variable API keys/base URLs as the dedicated provider nodes. Unlike the dedicated provider nodes, this node posts a Responses API payload to the provider's `/responses` endpoint: `litellm` mode uses the OpenAI-compatible `tools: [{"type": "image_generation", ...}]` shape, while `openrouter` mode uses OpenRouter's server-tool shape `tools: [{"type": "openrouter:image_generation", "parameters": {...}}]`. In `openrouter` mode, the node's `model` is the Responses model that sees the inputs and calls the tool, and `image_model` is the actual image-generation model.
 
 `GPT-Image-2 Response i2i` is also image-input-only and uses the same Codex I2I image packing. Its `mode` selects `openrouter` or `litellm`, but both modes post a native OpenAI-style Responses payload with `tools: [{"type": "image_generation", "action": "edit", ...}]`. This node is meant to copy the Codex I2I Responses tool-call shape. In `openrouter` mode, `model` is the Responses model that sees the inputs and calls the tool, while `image_model` is sent as the OpenRouter tool parameter so the actual generator stays on `openai/gpt-image-2` instead of OpenRouter's default image tool model. LiteLLM mode keeps the plain native tool shape and ignores `image_model`. OpenRouter currently normalizes the returned item to `openrouter:image_generation`, so the node extracts either its `result` base64 data or `imageUrl`.
+
+`Requesty I2I (gpt-image-2 edit)` is image-input-only and posts real multipart form data to Requesty's `/images/edits` route. The default model is `azure/openai/gpt-image-2`; a single reference image is sent as `image`, and multiple references are sent as repeated `image[]` file parts. The generated image is read from `data[0].b64_json`.
+
+`WaveSpeed I2I (gpt-image-2 edit)` is image-input-only and posts JSON to WaveSpeed's `openai/gpt-image-2/edit` prediction API. It sends the Codex-packed reference images as the `images` array, enables sync mode and base64 output, and maps the node's pixel `size` to WaveSpeed's `aspect_ratio` plus `resolution` settings before decoding the returned output.
 
 ---
 
@@ -223,10 +237,19 @@ All read at import time:
 | `CODEX_HOME` | `~/.codex` | Codex auth directory |
 | `CODEX_IMAGE_OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1/images` | OpenRouter Images API endpoint |
 | `CODEX_IMAGE_OPENROUTER_MODEL` | `openai/gpt-image-2` | Default model for the OpenRouter node |
+| `CODEX_IMAGE_OPENROUTER_RESPONSES_MODEL` | `openai/gpt-5.2` | Default Responses model for OpenRouter Responses-based nodes |
+| `CODEX_IMAGE_OPENROUTER_IMAGE_MODEL` | `openai/gpt-image-2` | Actual OpenRouter image tool model for Responses I2I nodes |
 | `CODEX_IMAGE_OPENROUTER_API_KEY` / `OPENROUTER_API_KEY` | _(empty)_ | OpenRouter API key |
 | `CODEX_IMAGE_LITELLM_BASE_URL` | `http://localhost:4000` | LiteLLM proxy base URL or images endpoint |
 | `CODEX_IMAGE_LITELLM_MODEL` | `gpt-image-2` | Default model for the LiteLLM node |
 | `CODEX_IMAGE_LITELLM_API_KEY` / `LITELLM_API_KEY` / `LITELLM_MASTER_KEY` | _(empty)_ | LiteLLM proxy API key |
+| `CODEX_IMAGE_REQUESTY_BASE_URL` | `https://router.requesty.ai/v1` | Requesty OpenAI-compatible base URL |
+| `CODEX_IMAGE_REQUESTY_MODEL` | `azure/openai/gpt-image-2` | Default model for the Requesty edit node |
+| `REQUESTY_API_KEY` | _(empty)_ | Requesty API key |
+| `CODEX_IMAGE_WAVESPEED_BASE_URL` | `https://api.wavespeed.ai/api/v3` | WaveSpeed API v3 base URL |
+| `CODEX_IMAGE_WAVESPEED_MODEL` | `openai/gpt-image-2/edit` | Default model path for the WaveSpeed edit node |
+| `CODEX_IMAGE_WAVESPEED_API_KEY` / `WAVESPEED_API_KEY` | _(empty)_ | WaveSpeed API key |
+| `CODEX_IMAGE_WAVESPEED_POLL_INTERVAL_SECONDS` | `2` | Poll interval used if WaveSpeed returns an async task |
 
 ---
 

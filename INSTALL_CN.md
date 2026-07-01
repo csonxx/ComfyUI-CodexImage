@@ -11,6 +11,8 @@
    - `OpenRouter Image (GPT Image 2)`
    - `Mix Codex Copycat Image I2I (GPT Image 2)`
    - `GPT-Image-2 Response i2i`
+   - `Requesty I2I (gpt-image-2 edit)`
+   - `WaveSpeed I2I (gpt-image-2 edit)`
    - `LiteLLM Image (GPT Image 2)`
 
 ## 认证
@@ -35,7 +37,23 @@ export CODEX_IMAGE_LITELLM_BASE_URL="http://localhost:4000"
 export CODEX_IMAGE_LITELLM_MODEL="gpt-image-2"
 ```
 
-`CODEX_IMAGE_OPENROUTER_MODEL` 和 `CODEX_IMAGE_LITELLM_MODEL` 只是默认值，节点上仍然可以手动填写模型名。
+Requesty edit 节点可以在节点上临时填 `api_key`，不填时读取环境变量：
+
+```bash
+export REQUESTY_API_KEY="sk-..."
+export CODEX_IMAGE_REQUESTY_BASE_URL="https://router.requesty.ai/v1"
+export CODEX_IMAGE_REQUESTY_MODEL="azure/openai/gpt-image-2"
+```
+
+WaveSpeed edit 节点也可以在节点上临时填 `api_key`，不填时读取环境变量：
+
+```bash
+export WAVESPEED_API_KEY="ws_..."
+export CODEX_IMAGE_WAVESPEED_BASE_URL="https://api.wavespeed.ai/api/v3"
+export CODEX_IMAGE_WAVESPEED_MODEL="openai/gpt-image-2/edit"
+```
+
+`CODEX_IMAGE_OPENROUTER_MODEL`、`CODEX_IMAGE_LITELLM_MODEL`、`CODEX_IMAGE_REQUESTY_MODEL` 和 `CODEX_IMAGE_WAVESPEED_MODEL` 只是默认值，节点上仍然可以手动填写模型名。
 
 Provider 节点会原样发送节点里填写的 model 或对应环境变量默认值，不会自动改写 provider 前缀。这里要填写你的 provider 实际暴露的 model alias，例如 `openai/gpt-image-2`、`gpt-image-2`、`openrouter/gpt-image-2`，或对应的 Vertex/Gemini alias。
 
@@ -60,6 +78,10 @@ tr '\0' '\n' < /proc/$pid/environ | sed -n -E 's/^(OPENROUTER_API_KEY|CODEX_IMAG
 `Mix Codex Copycat Image I2I (GPT Image 2)` 只做 I2I，主图必填，并用 `mode` 选择 `openrouter` 或 `litellm`。它复用对应 provider 的环境变量 key/base URL，但图片组织方式对齐 `Codex Image I2I (GPT Image 2)`：mask 会烘到第一张图的 alpha 通道。请求会走 provider 的 `/responses` 端点。`litellm` mode 发送 OpenAI 兼容的 `tools: [{"type": "image_generation", ...}]`；`openrouter` mode 发送 OpenRouter server tool 方言 `tools: [{"type": "openrouter:image_generation", "parameters": {...}}]`。OpenRouter mode 里节点的 `model` 是负责看图和调用工具的 Responses 模型，`image_model` 是实际生图模型。
 
 `GPT-Image-2 Response i2i` 也只做 I2I，主图必填，并用 `mode` 选择 `openrouter` 或 `litellm`。它同样复用 provider 环境变量 key/base URL，但会向 `/responses` 发送原生 OpenAI-style `tools: [{"type": "image_generation", "action": "edit", ...}]`，用于复刻 Codex I2I 的 Responses tool 调用形态。OpenRouter mode 里，`model` 是负责看图和调用工具的 Responses 模型，`image_model` 会作为 tool 参数发送，默认是 `openai/gpt-image-2`；LiteLLM mode 保持纯原生 tool 形态并忽略 `image_model`。
+
+`Requesty I2I (gpt-image-2 edit)` 只做 I2I，主图必填。它会把参考图解成 multipart 文件后 POST 到 Requesty 的 `/images/edits` 路由；默认模型是 `azure/openai/gpt-image-2`，返回图从 `data[0].b64_json` 读取。
+
+`WaveSpeed I2I (gpt-image-2 edit)` 只做 I2I，主图必填。它会向 WaveSpeed 的 `openai/gpt-image-2/edit` prediction API 发送 JSON，开启 sync mode 和 base64 output，并把节点里的像素 `size` 映射成 WaveSpeed 的 `aspect_ratio` 与 `resolution` 参数。
 
 Mask 规则：
 

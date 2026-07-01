@@ -55,9 +55,11 @@ GPT Image 2 (gpt-5.5) 生图 ComfyUI 自定义节点，同时提供独立 CLI。
 | `OpenRouter Image (GPT Image 2)` | OpenRouter dedicated Images API | `CODEX_IMAGE_OPENROUTER_API_KEY` 或 `OPENROUTER_API_KEY` |
 | `Mix Codex Copycat Image I2I (GPT Image 2)` | Codex 风格 I2I 图片组织方式，再由 `mode` 选择 OpenRouter 或 LiteLLM 发 Responses API tool call | OpenRouter 或 LiteLLM 环境变量 |
 | `GPT-Image-2 Response i2i` | Codex 风格 I2I 图片组织方式，再由 `mode` 选择 OpenRouter 或 LiteLLM 发原生 Responses `image_generation` + `action=edit` | OpenRouter 或 LiteLLM 环境变量 |
+| `Requesty I2I (gpt-image-2 edit)` | Requesty OpenAI-compatible `/v1/images/edits` multipart edit 路由 | 可选节点 `api_key`，否则读 `REQUESTY_API_KEY` |
+| `WaveSpeed I2I (gpt-image-2 edit)` | WaveSpeed `openai/gpt-image-2/edit` prediction API | 可选节点 `api_key`，否则读 `CODEX_IMAGE_WAVESPEED_API_KEY` 或 `WAVESPEED_API_KEY` |
 | `LiteLLM Image (GPT Image 2)` | LiteLLM OpenAI-compatible `/v1/images/*` proxy | `CODEX_IMAGE_LITELLM_API_KEY`、`LITELLM_API_KEY` 或 `LITELLM_MASTER_KEY` |
 
-Provider 节点都可以直接在节点上填写 `model`。`api_key` 不进 UI，只读环境变量；`base_url` 也不进 UI，默认从环境变量读取：
+Provider 节点都可以直接在节点上填写 `model`。`base_url` 不进 UI，默认从环境变量读取；Requesty 和 WaveSpeed 额外提供可选的节点级 `api_key`，方便单次覆盖：
 
 ```bash
 export OPENROUTER_API_KEY="sk-or-..."
@@ -69,6 +71,14 @@ export CODEX_IMAGE_OPENROUTER_IMAGE_MODEL="openai/gpt-image-2"
 export LITELLM_API_KEY="sk-..."
 export CODEX_IMAGE_LITELLM_BASE_URL="http://localhost:4000"
 export CODEX_IMAGE_LITELLM_MODEL="gpt-image-2"
+
+export REQUESTY_API_KEY="sk-..."
+export CODEX_IMAGE_REQUESTY_BASE_URL="https://router.requesty.ai/v1"
+export CODEX_IMAGE_REQUESTY_MODEL="azure/openai/gpt-image-2"
+
+export WAVESPEED_API_KEY="ws_..."
+export CODEX_IMAGE_WAVESPEED_BASE_URL="https://api.wavespeed.ai/api/v3"
+export CODEX_IMAGE_WAVESPEED_MODEL="openai/gpt-image-2/edit"
 ```
 
 Provider 节点会原样发送节点里填写的 model 或对应环境变量默认值，不会自动改写 provider 前缀。这里要填写你的 provider 实际暴露的 model alias，例如 `openai/gpt-image-2`、`gpt-image-2`、`openrouter/gpt-image-2`，或对应的 Vertex/Gemini alias。
@@ -81,11 +91,15 @@ tr '\0' '\n' < /proc/$pid/environ | grep -E '^(OPENROUTER_API_KEY|CODEX_IMAGE_OP
 tr '\0' '\n' < /proc/$pid/environ | sed -n -E 's/^(OPENROUTER_API_KEY|CODEX_IMAGE_OPENROUTER_API_KEY)=//p' | head -1 | awk '{print length($0), substr($0,1,8)}'
 ```
 
-这些 provider 节点支持纯 prompt 生图。接入 `image`、`image_2` 或 `mask` 时，会按 provider 能力走图像编辑/参考图请求。prompt 文本会按输入原样发送；尺寸、质量、mask 通过 API 字段或图片 alpha/multipart 数据表达，不再拼接到 prompt 文本里。
+OpenRouter 和 LiteLLM provider 节点支持纯 prompt 生图。接入 `image`、`image_2` 或 `mask` 时，会按 provider 能力走图像编辑/参考图请求。prompt 文本会按输入原样发送；尺寸、质量、mask 通过 API 字段或图片 alpha/multipart 数据表达，不再拼接到 prompt 文本里。
 
 `Mix Codex Copycat Image I2I (GPT Image 2)` 是只做 I2I 的节点，图片组织方式对齐 `Codex Image I2I (GPT Image 2)`：主图必发，`image_2` 是第二参考图，ComfyUI `mask` 会烘到第一张图的 alpha 通道。它用 `mode` 选择 `openrouter` 或 `litellm`，API key/base URL 仍然复用对应 provider 节点的环境变量。和两个独立 provider 节点不同，这个节点会向 provider 的 `/responses` 端点发送 Responses API payload：`litellm` mode 使用 OpenAI 兼容的 `tools: [{"type": "image_generation", ...}]`；`openrouter` mode 使用 OpenRouter server tool 方言 `tools: [{"type": "openrouter:image_generation", "parameters": {...}}]`，其中节点上的 `model` 是负责看图和调用工具的 Responses 模型，`image_model` 是实际生图模型。
 
 `GPT-Image-2 Response i2i` 也是只做 I2I 的节点，图片组织方式同样对齐 `Codex Image I2I (GPT Image 2)`，但无论 `mode` 选择 `openrouter` 还是 `litellm`，都会向 provider 的 `/responses` 端点发送原生 OpenAI-style `tools: [{"type": "image_generation", "action": "edit", ...}]` payload。这个节点用于复刻 Codex I2I 的 Responses tool 调用形态。OpenRouter mode 里，`model` 是负责看图和调用工具的 Responses 模型，`image_model` 会作为 OpenRouter tool 参数发送，确保实际生图模型固定在 `openai/gpt-image-2`，而不是落到 OpenRouter 默认 image tool 模型；LiteLLM mode 保持纯原生 tool 形态并忽略 `image_model`。OpenRouter 当前会把返回项规范化成 `openrouter:image_generation`，节点会从其中的 `result` 或 `imageUrl` 取图。
+
+`Requesty I2I (gpt-image-2 edit)` 只做 I2I，会把参考图解成真正的 multipart 文件后 POST 到 Requesty 的 `/images/edits` 路由。默认模型是 `azure/openai/gpt-image-2`；单张参考图字段名是 `image`，多张参考图使用重复的 `image[]` file part；返回图从 `data[0].b64_json` 读取。
+
+`WaveSpeed I2I (gpt-image-2 edit)` 只做 I2I，会向 WaveSpeed 的 `openai/gpt-image-2/edit` prediction API 发送 JSON。节点会把 Codex 风格打包后的参考图放到 `images` 数组里，开启 sync mode 和 base64 output，并把节点里的像素 `size` 映射成 WaveSpeed 的 `aspect_ratio` 与 `resolution` 参数后再解析返回图。
 
 ---
 
@@ -217,10 +231,19 @@ to(dtype=torch.float32)   →  最终 tensor
 | `CODEX_HOME` | `~/.codex` | Codex auth.json 目录 |
 | `CODEX_IMAGE_OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1/images` | OpenRouter Images API 端点 |
 | `CODEX_IMAGE_OPENROUTER_MODEL` | `openai/gpt-image-2` | OpenRouter 节点默认模型 |
+| `CODEX_IMAGE_OPENROUTER_RESPONSES_MODEL` | `openai/gpt-5.2` | OpenRouter Responses 类节点默认主模型 |
+| `CODEX_IMAGE_OPENROUTER_IMAGE_MODEL` | `openai/gpt-image-2` | Responses I2I 节点实际使用的 OpenRouter image tool 模型 |
 | `CODEX_IMAGE_OPENROUTER_API_KEY` / `OPENROUTER_API_KEY` | _(空)_ | OpenRouter API key |
 | `CODEX_IMAGE_LITELLM_BASE_URL` | `http://localhost:4000` | LiteLLM proxy base URL 或 images endpoint |
 | `CODEX_IMAGE_LITELLM_MODEL` | `gpt-image-2` | LiteLLM 节点默认模型 |
 | `CODEX_IMAGE_LITELLM_API_KEY` / `LITELLM_API_KEY` / `LITELLM_MASTER_KEY` | _(空)_ | LiteLLM proxy API key |
+| `CODEX_IMAGE_REQUESTY_BASE_URL` | `https://router.requesty.ai/v1` | Requesty OpenAI-compatible base URL |
+| `CODEX_IMAGE_REQUESTY_MODEL` | `azure/openai/gpt-image-2` | Requesty edit 节点默认模型 |
+| `REQUESTY_API_KEY` | _(空)_ | Requesty API key |
+| `CODEX_IMAGE_WAVESPEED_BASE_URL` | `https://api.wavespeed.ai/api/v3` | WaveSpeed API v3 base URL |
+| `CODEX_IMAGE_WAVESPEED_MODEL` | `openai/gpt-image-2/edit` | WaveSpeed edit 节点默认模型路径 |
+| `CODEX_IMAGE_WAVESPEED_API_KEY` / `WAVESPEED_API_KEY` | _(空)_ | WaveSpeed API key |
+| `CODEX_IMAGE_WAVESPEED_POLL_INTERVAL_SECONDS` | `2` | WaveSpeed 返回异步任务时的轮询间隔 |
 
 ---
 
