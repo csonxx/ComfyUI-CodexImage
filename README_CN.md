@@ -48,14 +48,15 @@ GPT Image 2 (gpt-5.5) 生图 ComfyUI 自定义节点，同时提供独立 CLI。
 
 ## 额外 Provider 节点
 
-现在还提供两个独立 provider 节点：
+现在还提供这些 provider 节点：
 
 | 节点 | API 目标 | API Key |
 |------|----------|---------|
 | `OpenRouter Image (GPT Image 2)` | OpenRouter dedicated Images API | `CODEX_IMAGE_OPENROUTER_API_KEY` 或 `OPENROUTER_API_KEY` |
+| `Mix Codex Copycat Image I2I (GPT Image 2)` | Codex 风格 I2I 图片组织方式，再由 `mode` 选择 OpenRouter 或 LiteLLM 发 Responses API `image_generation` tool call | OpenRouter 或 LiteLLM 环境变量 |
 | `LiteLLM Image (GPT Image 2)` | LiteLLM OpenAI-compatible `/v1/images/*` proxy | `CODEX_IMAGE_LITELLM_API_KEY`、`LITELLM_API_KEY` 或 `LITELLM_MASTER_KEY` |
 
-两个节点都可以直接在节点上填写 `model`。`api_key` 不进 UI，只读环境变量；`base_url` 也不进 UI，默认从环境变量读取：
+Provider 节点都可以直接在节点上填写 `model`。`api_key` 不进 UI，只读环境变量；`base_url` 也不进 UI，默认从环境变量读取：
 
 ```bash
 export OPENROUTER_API_KEY="sk-or-..."
@@ -77,7 +78,9 @@ tr '\0' '\n' < /proc/$pid/environ | grep -E '^(OPENROUTER_API_KEY|CODEX_IMAGE_OP
 tr '\0' '\n' < /proc/$pid/environ | sed -n -E 's/^(OPENROUTER_API_KEY|CODEX_IMAGE_OPENROUTER_API_KEY)=//p' | head -1 | awk '{print length($0), substr($0,1,8)}'
 ```
 
-这两个节点支持纯 prompt 生图。接入 `image`、`image_2` 或 `mask` 时，会按 provider 能力走图像编辑/参考图请求。prompt 文本会按输入原样发送；尺寸、质量、mask 通过 API 字段或图片 alpha/multipart 数据表达，不再拼接到 prompt 文本里。
+这些 provider 节点支持纯 prompt 生图。接入 `image`、`image_2` 或 `mask` 时，会按 provider 能力走图像编辑/参考图请求。prompt 文本会按输入原样发送；尺寸、质量、mask 通过 API 字段或图片 alpha/multipart 数据表达，不再拼接到 prompt 文本里。
+
+`Mix Codex Copycat Image I2I (GPT Image 2)` 是只做 I2I 的节点，图片组织方式对齐 `Codex Image I2I (GPT Image 2)`：主图必发，`image_2` 是第二参考图，ComfyUI `mask` 会烘到第一张图的 alpha 通道。它用 `mode` 选择 `openrouter` 或 `litellm`，API key/base URL 仍然复用对应 provider 节点的环境变量。和两个独立 provider 节点不同，这个节点会向 provider 的 `/responses` 端点发送带 `tools: [{"type": "image_generation", ...}]` 的 Responses API payload。
 
 ---
 

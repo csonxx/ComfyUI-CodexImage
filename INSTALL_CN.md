@@ -9,6 +9,7 @@
    - `Codex Image (GPT Image 2)`
    - `Codex Image I2I (GPT Image 2)`
    - `OpenRouter Image (GPT Image 2)`
+   - `Mix Codex Copycat Image I2I (GPT Image 2)`
    - `LiteLLM Image (GPT Image 2)`
 
 ## 认证
@@ -54,6 +55,8 @@ tr '\0' '\n' < /proc/$pid/environ | sed -n -E 's/^(OPENROUTER_API_KEY|CODEX_IMAG
 - `mask`: 可选遮罩。
 
 `OpenRouter Image (GPT Image 2)` 和 `LiteLLM Image (GPT Image 2)` 也支持可选 `image` / `image_2` / `mask`。不接图片时就是纯 prompt 生图。
+
+`Mix Codex Copycat Image I2I (GPT Image 2)` 只做 I2I，主图必填，并用 `mode` 选择 `openrouter` 或 `litellm`。它复用对应 provider 的环境变量 key/base URL，但图片组织方式对齐 `Codex Image I2I (GPT Image 2)`：mask 会烘到第一张图的 alpha 通道。请求会走 provider 的 `/responses` 端点，并发送带 `tools: [{"type": "image_generation", ...}]` 的 Responses API payload。
 
 Mask 规则：
 

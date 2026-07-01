@@ -146,6 +146,19 @@ def _resolve_openrouter_url(base_url: str) -> str:
     return f"{base_url}/api/v1/images"
 
 
+def _resolve_openrouter_responses_url(base_url: str) -> str:
+    """Resolve OpenRouter base URL to its Responses API endpoint."""
+    base_url = (base_url or "").strip() or DEFAULT_OPENROUTER_BASE_URL
+    base_url = base_url.rstrip("/")
+    if base_url.endswith("/api/v1/responses"):
+        return base_url
+    if base_url.endswith("/api/v1/images"):
+        return base_url.rsplit("/", 1)[0] + "/responses"
+    if base_url.endswith("/api/v1"):
+        return f"{base_url}/responses"
+    return f"{base_url}/api/v1/responses"
+
+
 def _resolve_litellm_url(base_url: str, edit: bool = False) -> str:
     """Resolve LiteLLM base URL to /v1/images/generations or /v1/images/edits."""
     endpoint = "edits" if edit else "generations"
@@ -161,6 +174,20 @@ def _resolve_litellm_url(base_url: str, edit: bool = False) -> str:
     if base_url.endswith("/v1"):
         return f"{base_url}/images/{endpoint}"
     return f"{base_url}/v1/images/{endpoint}"
+
+
+def _resolve_litellm_responses_url(base_url: str) -> str:
+    """Resolve LiteLLM base URL to /v1/responses."""
+    base_url = (base_url or "").strip() or DEFAULT_LITELLM_BASE_URL
+    base_url = base_url.rstrip("/")
+    if base_url.endswith("/v1/responses"):
+        return base_url
+    for suffix in ("/v1/images/generations", "/v1/images/edits", "/v1/images"):
+        if base_url.endswith(suffix):
+            return base_url[: -len(suffix)] + "/v1/responses"
+    if base_url.endswith("/v1"):
+        return f"{base_url}/responses"
+    return f"{base_url}/v1/responses"
 
 
 def _resolve_env_api_key(api_key: str, env_names: tuple[str, ...], label: str) -> str:
@@ -256,7 +283,13 @@ def _normalize_litellm_model(model: str) -> str:
     return model
 
 
-def _post_streaming(url: str, token: str, payload: dict, timeout: int) -> list[dict]:
+def _post_streaming(
+    url: str,
+    token: str,
+    payload: dict,
+    timeout: int,
+    extra_headers: dict[str, str] | None = None,
+) -> list[dict]:
     """POST JSON with SSE streaming, collect all data events."""
     from urllib import error, request
 
@@ -266,6 +299,7 @@ def _post_streaming(url: str, token: str, payload: dict, timeout: int) -> list[d
         "Content-Type": "application/json",
         "Accept": "text/event-stream",
     }
+    headers.update(extra_headers or {})
     req = request.Request(url, data=body, headers=headers, method="POST")
     events: list[dict] = []
 
@@ -458,6 +492,58 @@ def _build_payload(
 
 # ── API mode ──────────────────────────────────────────────────────────────────
 
+def _run_responses_image_request(
+    api_url: str,
+    token: str,
+    payload: dict[str, Any],
+    fmt: str,
+    extra_headers: dict[str, str] | None = None,
+) -> tuple[bytes, str]:
+    last_retryable_error: RuntimeError | None = None
+
+    for attempt in range(max(1, DEFAULT_MAX_RETRIES)):
+        try:
+            events = _post_streaming(
+                api_url,
+                token,
+                payload,
+                DEFAULT_TIMEOUT,
+                extra_headers=extra_headers,
+            )
+            img_b64 = _extract_image(events)
+            break
+        except (CodexImageRateLimitError, CodexImageTransientAPIError) as exc:
+            last_retryable_error = exc
+            if attempt >= DEFAULT_MAX_RETRIES - 1:
+                if isinstance(exc, CodexImageRateLimitError):
+                    raise CodexImageRateLimitError(
+                        _build_rate_limit_message(exc, attempt + 1),
+                        exc.retry_after_seconds,
+                    ) from exc
+                raise RuntimeError(_build_transient_api_message(exc, attempt + 1)) from exc
+            is_rate_limit = isinstance(exc, CodexImageRateLimitError)
+            retry_after = exc.retry_after_seconds if is_rate_limit else None
+            backoff = DEFAULT_RETRY_BASE_SECONDS * (2 ** attempt)
+            delay = max(
+                retry_after or 0.0,
+                backoff,
+                _rate_limit_floor_seconds(str(exc)) if is_rate_limit else 0.0,
+            )
+            delay = min(delay, DEFAULT_RETRY_MAX_SECONDS)
+            reason = "rate limited" if is_rate_limit else "temporary API error"
+            print(
+                f"[codex_image] {reason}; retrying in {delay:.1f}s "
+                f"({attempt + 2}/{DEFAULT_MAX_RETRIES})",
+                file=sys.stderr,
+            )
+            time.sleep(delay)
+    else:
+        raise last_retryable_error or RuntimeError("Codex image generation failed")
+
+    img_bytes = base64.b64decode(img_b64)
+    return img_bytes, _write_temp_image(img_bytes, fmt)
+
+
 def _generate_api(
     prompt: str,
     model: str,
@@ -494,44 +580,7 @@ def _generate_api(
         input_image_urls=input_image_urls,
         action=action,
     )
-    last_retryable_error: RuntimeError | None = None
-
-    for attempt in range(max(1, DEFAULT_MAX_RETRIES)):
-        try:
-            events = _post_streaming(api_url, token, payload, DEFAULT_TIMEOUT)
-            img_b64 = _extract_image(events)
-            break
-        except (CodexImageRateLimitError, CodexImageTransientAPIError) as exc:
-            last_retryable_error = exc
-            if attempt >= DEFAULT_MAX_RETRIES - 1:
-                if isinstance(exc, CodexImageRateLimitError):
-                    raise CodexImageRateLimitError(
-                        _build_rate_limit_message(exc, attempt + 1),
-                        exc.retry_after_seconds,
-                    ) from exc
-                raise RuntimeError(_build_transient_api_message(exc, attempt + 1)) from exc
-            is_rate_limit = isinstance(exc, CodexImageRateLimitError)
-            retry_after = exc.retry_after_seconds if is_rate_limit else None
-            backoff = DEFAULT_RETRY_BASE_SECONDS * (2 ** attempt)
-            delay = max(
-                retry_after or 0.0,
-                backoff,
-                _rate_limit_floor_seconds(str(exc)) if is_rate_limit else 0.0,
-            )
-            delay = min(delay, DEFAULT_RETRY_MAX_SECONDS)
-            reason = "rate limited" if is_rate_limit else "temporary API error"
-            print(
-                f"[codex_image] {reason}; retrying in {delay:.1f}s "
-                f"({attempt + 2}/{DEFAULT_MAX_RETRIES})",
-                file=sys.stderr,
-            )
-            time.sleep(delay)
-    else:
-        raise last_retryable_error or RuntimeError("Codex image generation failed")
-
-    img_bytes = base64.b64decode(img_b64)
-
-    return img_bytes, _write_temp_image(img_bytes, fmt)
+    return _run_responses_image_request(api_url, token, payload, fmt)
 
 
 # ── OpenRouter / LiteLLM image APIs ───────────────────────────────────────────
@@ -750,6 +799,71 @@ def _generate_openrouter(
     response = _post_json(url, token, payload, DEFAULT_TIMEOUT, extra_headers=extra_headers)
     img_bytes = _extract_image_bytes_from_images_response(response, token)
     return img_bytes, _write_temp_image(img_bytes, fmt)
+
+
+def generate_responses_image(
+    prompt: str,
+    model: str = "",
+    size: str = DEFAULT_SIZE,
+    quality: str = DEFAULT_QUALITY,
+    fmt: str = DEFAULT_FORMAT,
+    mode: Literal["api", "auth", "openrouter", "litellm"] = "auth",
+    base_url: str = "",
+    api_key: str = "",
+    input_image_urls: list[str] | None = None,
+    action: str = "auto",
+) -> tuple[bytes, str]:
+    """Generate an image via a Responses API image_generation tool call."""
+    if not prompt.strip():
+        raise ValueError("prompt cannot be empty")
+
+    if mode == "openrouter":
+        api_url = _resolve_openrouter_responses_url(base_url)
+        token = _resolve_env_api_key(
+            api_key,
+            ("CODEX_IMAGE_OPENROUTER_API_KEY", "OPENROUTER_API_KEY"),
+            "OpenRouter",
+        )
+        actual_model = (model or "").strip() or DEFAULT_OPENROUTER_MODEL
+        extra_headers = {}
+        referer = os.environ.get("OPENROUTER_HTTP_REFERER", "").strip()
+        if referer:
+            extra_headers["HTTP-Referer"] = referer
+        title = os.environ.get("OPENROUTER_X_TITLE", "").strip()
+        if title:
+            extra_headers["X-Title"] = title
+    elif mode == "litellm":
+        api_url = _resolve_litellm_responses_url(base_url)
+        token = _resolve_env_api_key(
+            api_key,
+            ("CODEX_IMAGE_LITELLM_API_KEY", "LITELLM_API_KEY", "LITELLM_MASTER_KEY"),
+            "LiteLLM",
+        )
+        actual_model = _normalize_litellm_model(model)
+        extra_headers = {}
+    elif mode in ("api", "auth"):
+        api_url = _resolve_api_url(base_url or DEFAULT_BASE_URL)
+        token = _resolve_api_key("" if mode == "auth" else api_key)
+        actual_model = (model or "").strip() or DEFAULT_MODEL
+        extra_headers = {}
+    else:
+        raise ValueError("mode must be api, auth, openrouter, or litellm")
+
+    payload = _build_payload(
+        prompt=prompt,
+        model=actual_model,
+        size=size,
+        quality=quality,
+        input_image_urls=input_image_urls,
+        action=action,
+    )
+    return _run_responses_image_request(
+        api_url,
+        token,
+        payload,
+        fmt,
+        extra_headers=extra_headers,
+    )
 
 
 def _build_litellm_generation_payload(
