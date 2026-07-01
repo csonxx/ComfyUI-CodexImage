@@ -54,6 +54,7 @@ GPT Image 2 (gpt-5.5) 生图 ComfyUI 自定义节点，同时提供独立 CLI。
 |------|----------|---------|
 | `OpenRouter Image (GPT Image 2)` | OpenRouter dedicated Images API | `CODEX_IMAGE_OPENROUTER_API_KEY` 或 `OPENROUTER_API_KEY` |
 | `Mix Codex Copycat Image I2I (GPT Image 2)` | Codex 风格 I2I 图片组织方式，再由 `mode` 选择 OpenRouter 或 LiteLLM 发 Responses API tool call | OpenRouter 或 LiteLLM 环境变量 |
+| `GPT-Image-2 Response i2i` | Codex 风格 I2I 图片组织方式，再由 `mode` 选择 OpenRouter 或 LiteLLM 发原生 Responses `image_generation` + `action=edit` | OpenRouter 或 LiteLLM 环境变量 |
 | `LiteLLM Image (GPT Image 2)` | LiteLLM OpenAI-compatible `/v1/images/*` proxy | `CODEX_IMAGE_LITELLM_API_KEY`、`LITELLM_API_KEY` 或 `LITELLM_MASTER_KEY` |
 
 Provider 节点都可以直接在节点上填写 `model`。`api_key` 不进 UI，只读环境变量；`base_url` 也不进 UI，默认从环境变量读取：
@@ -83,6 +84,8 @@ tr '\0' '\n' < /proc/$pid/environ | sed -n -E 's/^(OPENROUTER_API_KEY|CODEX_IMAG
 这些 provider 节点支持纯 prompt 生图。接入 `image`、`image_2` 或 `mask` 时，会按 provider 能力走图像编辑/参考图请求。prompt 文本会按输入原样发送；尺寸、质量、mask 通过 API 字段或图片 alpha/multipart 数据表达，不再拼接到 prompt 文本里。
 
 `Mix Codex Copycat Image I2I (GPT Image 2)` 是只做 I2I 的节点，图片组织方式对齐 `Codex Image I2I (GPT Image 2)`：主图必发，`image_2` 是第二参考图，ComfyUI `mask` 会烘到第一张图的 alpha 通道。它用 `mode` 选择 `openrouter` 或 `litellm`，API key/base URL 仍然复用对应 provider 节点的环境变量。和两个独立 provider 节点不同，这个节点会向 provider 的 `/responses` 端点发送 Responses API payload：`litellm` mode 使用 OpenAI 兼容的 `tools: [{"type": "image_generation", ...}]`；`openrouter` mode 使用 OpenRouter server tool 方言 `tools: [{"type": "openrouter:image_generation", "parameters": {...}}]`，其中节点上的 `model` 是负责看图和调用工具的 Responses 模型，`image_model` 是实际生图模型。
+
+`GPT-Image-2 Response i2i` 也是只做 I2I 的节点，图片组织方式同样对齐 `Codex Image I2I (GPT Image 2)`，但无论 `mode` 选择 `openrouter` 还是 `litellm`，都会向 provider 的 `/responses` 端点发送原生 OpenAI-style `tools: [{"type": "image_generation", "action": "edit", ...}]` payload。这个节点用于复刻 Codex I2I 的 Responses tool 调用形态；OpenRouter 当前会把返回项规范化成 `openrouter:image_generation`，节点会从其中的 `result` 或 `imageUrl` 取图。
 
 ---
 

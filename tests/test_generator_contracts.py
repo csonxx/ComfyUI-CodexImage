@@ -179,6 +179,50 @@ class GeneratorContractsTest(unittest.TestCase):
         self.assertEqual(payload["tools"][0]["type"], "openrouter:image_generation")
         self.assertEqual(payload["tools"][0]["parameters"]["model"], generator.DEFAULT_OPENROUTER_IMAGE_MODEL)
 
+    def test_native_openrouter_responses_uses_image_generation_action_edit_payload(self):
+        seen = []
+        original_run = generator._run_responses_image_request
+        original_resolve_key = generator._resolve_env_api_key
+
+        def fake_run(api_url, token, payload, fmt, extra_headers=None):
+            seen.append(
+                {
+                    "api_url": api_url,
+                    "token": token,
+                    "payload": payload,
+                    "fmt": fmt,
+                    "extra_headers": extra_headers,
+                }
+            )
+            return b"\x89PNG\r\n\x1a\n", "/tmp/out.png"
+
+        try:
+            generator._run_responses_image_request = fake_run
+            generator._resolve_env_api_key = lambda api_key, env_names, label: f"{label}-token"
+
+            generator.generate_native_responses_image(
+                prompt="plain prompt",
+                model="gpt-5.5",
+                size="1024x1536",
+                quality="medium",
+                fmt="png",
+                mode="openrouter",
+                input_image_urls=["data:image/png;base64,abc"],
+                action="edit",
+            )
+        finally:
+            generator._run_responses_image_request = original_run
+            generator._resolve_env_api_key = original_resolve_key
+
+        self.assertEqual(seen[0]["api_url"], "https://openrouter.ai/api/v1/responses")
+        self.assertEqual(seen[0]["token"], "OpenRouter-token")
+        self.assertEqual(seen[0]["payload"]["model"], "gpt-5.5")
+        self.assertEqual(seen[0]["payload"]["tools"][0]["type"], "image_generation")
+        self.assertEqual(seen[0]["payload"]["tools"][0]["action"], "edit")
+        self.assertNotIn("parameters", seen[0]["payload"]["tools"][0])
+        self.assertEqual(seen[0]["payload"]["input"][0]["content"][0]["text"], "plain prompt")
+        self.assertEqual(seen[0]["payload"]["input"][0]["content"][1]["image_url"], "data:image/png;base64,abc")
+
     def test_litellm_responses_uses_image_generation_tool_payload(self):
         seen = []
         original_run = generator._run_responses_image_request
@@ -251,6 +295,26 @@ class GeneratorContractsTest(unittest.TestCase):
         self.assertEqual(img_bytes, b"\x89PNG\r\n\x1a\n")
         self.assertEqual(seen, [{"url": "https://example.test/generated.png", "token": ""}])
 
+    def test_responses_extracts_openrouter_image_generation_result(self):
+        img_bytes = generator._extract_image_bytes_from_responses_events(
+            [
+                {
+                    "type": "response.completed",
+                    "response": {
+                        "output": [
+                            {
+                                "type": "openrouter:image_generation",
+                                "result": "iVBORw0KGgo=",
+                                "imageUrl": "https://example.test/generated.png",
+                            }
+                        ]
+                    },
+                }
+            ]
+        )
+
+        self.assertEqual(img_bytes, b"\x89PNG\r\n\x1a\n")
+
     def test_responses_extracts_openrouter_markdown_image_url(self):
         original_download = generator._download_image_url
         seen = []
@@ -315,6 +379,10 @@ class NodeContractsTest(unittest.TestCase):
             "MixCodexCopycatImageI2INode",
         )
         self.assertEqual(
+            module.NODE_CLASS_MAPPINGS["GPTImage2ResponseI2INode"].__name__,
+            "GPTImage2ResponseI2INode",
+        )
+        self.assertEqual(
             module.NODE_DISPLAY_NAME_MAPPINGS["OpenRouterImageNode"],
             "OpenRouter Image (GPT Image 2)",
         )
@@ -325,6 +393,10 @@ class NodeContractsTest(unittest.TestCase):
         self.assertEqual(
             module.NODE_DISPLAY_NAME_MAPPINGS["MixCodexCopycatImageI2INode"],
             "Mix Codex Copycat Image I2I (GPT Image 2)",
+        )
+        self.assertEqual(
+            module.NODE_DISPLAY_NAME_MAPPINGS["GPTImage2ResponseI2INode"],
+            "GPT-Image-2 Response i2i",
         )
 
     def test_output_copy_uses_actual_image_suffix(self):
@@ -471,6 +543,52 @@ class NodeContractsTest(unittest.TestCase):
         self.assertEqual(seen[0]["input_image_urls"], ["data:image/png;base64,mask"])
         self.assertEqual(seen[0]["action"], "edit")
         self.assertNotIn("mask_image_url", seen[0])
+
+    def test_gpt_image_2_response_i2i_routes_provider_with_native_responses_payload(self):
+        seen = []
+        original_has_comfyu = codex_image_node._HAS_COMFYU
+        original_mask_to_url = codex_image_node._image_tensor_and_mask_to_data_url
+        original_image_to_url = codex_image_node._image_tensor_to_data_url
+        original_image_to_tensor = codex_image_node._image_bytes_to_tensor
+        original_generate = codex_image_node.generate_native_responses_image
+
+        def fake_generate(**kwargs):
+            seen.append(kwargs)
+            return b"\x89PNG\r\n\x1a\n", "/tmp/out.png"
+
+        try:
+            codex_image_node._HAS_COMFYU = True
+            codex_image_node._image_tensor_and_mask_to_data_url = lambda image, mask: "data:image/png;base64,mask"
+            codex_image_node._image_tensor_to_data_url = lambda image: "data:image/png;base64,image"
+            codex_image_node._image_bytes_to_tensor = lambda img_bytes: "tensor"
+            codex_image_node.generate_native_responses_image = fake_generate
+
+            codex_image_node.GPTImage2ResponseI2INode().generate(
+                image=object(),
+                mode="openrouter",
+                prompt="plain prompt",
+                model="gpt-5.5",
+                size="1024x1024",
+                quality="medium",
+                format="png",
+                image_2=object(),
+                mask=object(),
+            )
+        finally:
+            codex_image_node._HAS_COMFYU = original_has_comfyu
+            codex_image_node._image_tensor_and_mask_to_data_url = original_mask_to_url
+            codex_image_node._image_tensor_to_data_url = original_image_to_url
+            codex_image_node._image_bytes_to_tensor = original_image_to_tensor
+            codex_image_node.generate_native_responses_image = original_generate
+
+        self.assertEqual(seen[0]["mode"], "openrouter")
+        self.assertEqual(seen[0]["prompt"], "plain prompt")
+        self.assertEqual(seen[0]["model"], "gpt-5.5")
+        self.assertEqual(
+            seen[0]["input_image_urls"],
+            ["data:image/png;base64,mask", "data:image/png;base64,image"],
+        )
+        self.assertEqual(seen[0]["action"], "edit")
 
     def test_openrouter_mask_does_not_modify_prompt(self):
         seen = []

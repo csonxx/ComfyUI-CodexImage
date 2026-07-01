@@ -435,13 +435,13 @@ def _extract_base64_image(events: list[dict]) -> str | None:
 
         for key in ("item", "output_item"):
             item = ev.get(key, {})
-            if item.get("type") == "image_generation_call" and item.get("result"):
+            if item.get("type") in ("image_generation_call", "openrouter:image_generation") and item.get("result"):
                 return str(item["result"])
 
         resp = ev.get("response", {})
         if isinstance(resp, dict):
             for o in resp.get("output") or []:
-                if o.get("type") == "image_generation_call" and o.get("result"):
+                if o.get("type") in ("image_generation_call", "openrouter:image_generation") and o.get("result"):
                     return str(o["result"])
 
     return None
@@ -1027,6 +1027,71 @@ def generate_responses_image(
             input_image_urls=input_image_urls,
             action=action,
         )
+    return _run_responses_image_request(
+        api_url,
+        token,
+        payload,
+        fmt,
+        extra_headers=extra_headers,
+    )
+
+
+def generate_native_responses_image(
+    prompt: str,
+    model: str = "",
+    size: str = DEFAULT_SIZE,
+    quality: str = DEFAULT_QUALITY,
+    fmt: str = DEFAULT_FORMAT,
+    mode: Literal["api", "auth", "openrouter", "litellm"] = "openrouter",
+    base_url: str = "",
+    api_key: str = "",
+    input_image_urls: list[str] | None = None,
+    action: str = "auto",
+) -> tuple[bytes, str]:
+    """Generate via a native OpenAI-style Responses image_generation tool call."""
+    if not prompt.strip():
+        raise ValueError("prompt cannot be empty")
+
+    if mode == "openrouter":
+        api_url = _resolve_openrouter_responses_url(base_url)
+        token = _resolve_env_api_key(
+            api_key,
+            ("CODEX_IMAGE_OPENROUTER_API_KEY", "OPENROUTER_API_KEY"),
+            "OpenRouter",
+        )
+        actual_model = (model or "").strip() or DEFAULT_OPENROUTER_RESPONSES_MODEL
+        extra_headers = {}
+        referer = os.environ.get("OPENROUTER_HTTP_REFERER", "").strip()
+        if referer:
+            extra_headers["HTTP-Referer"] = referer
+        title = os.environ.get("OPENROUTER_X_TITLE", "").strip()
+        if title:
+            extra_headers["X-Title"] = title
+    elif mode == "litellm":
+        api_url = _resolve_litellm_responses_url(base_url)
+        token = _resolve_env_api_key(
+            api_key,
+            ("CODEX_IMAGE_LITELLM_API_KEY", "LITELLM_API_KEY", "LITELLM_MASTER_KEY"),
+            "LiteLLM",
+        )
+        actual_model = _normalize_litellm_model(model)
+        extra_headers = {}
+    elif mode in ("api", "auth"):
+        api_url = _resolve_api_url(base_url or DEFAULT_BASE_URL)
+        token = _resolve_api_key("" if mode == "auth" else api_key)
+        actual_model = (model or "").strip() or DEFAULT_MODEL
+        extra_headers = {}
+    else:
+        raise ValueError("mode must be api, auth, openrouter, or litellm")
+
+    payload = _build_payload(
+        prompt=prompt,
+        model=actual_model,
+        size=size,
+        quality=quality,
+        input_image_urls=input_image_urls,
+        action=action,
+    )
     return _run_responses_image_request(
         api_url,
         token,

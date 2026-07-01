@@ -31,6 +31,7 @@ from generator import (
     DEFAULT_LITELLM_MODEL,
     SUPPORTED_SIZES,
     generate_image,
+    generate_native_responses_image,
     generate_responses_image,
 )
 
@@ -483,6 +484,77 @@ class MixCodexCopycatImageI2INode:
             prompt=prompt,
             model=model,
             image_model=image_model,
+            size=size,
+            quality=quality,
+            fmt=format,
+            mode=mode,
+            input_image_urls=input_image_urls,
+            action="edit",
+        )
+
+        tensor = _image_bytes_to_tensor(img_bytes)
+        img_path = _write_output_copy(img_bytes, img_path, output_path, format)
+        return (tensor, img_path)
+
+
+class GPTImage2ResponseI2INode:
+    """Use native Responses image_generation action=edit through providers."""
+
+    CATEGORY = "image/generation"
+    FUNCTION = "generate"
+    RETURN_TYPES = ("IMAGE", "STRING")
+    RETURN_NAMES = ("image", "image_path")
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+                "mode": (["openrouter", "litellm"], {"default": "openrouter", "label": "mode"}),
+                "prompt": ("STRING", {"multiline": True, "default": ""}),
+                "model": ("STRING", {"default": "gpt-5.5"}),
+                "size": (list(SUPPORTED_SIZES), {"default": DEFAULT_SIZE, "label": "size"}),
+                "quality": (["auto", "low", "medium", "high"], {"default": DEFAULT_QUALITY}),
+                "format": (["png", "jpeg", "webp"], {"default": DEFAULT_FORMAT}),
+            },
+            "optional": {
+                "image_2": ("IMAGE",),
+                "mask": ("MASK",),
+                "output_path": ("STRING", {"default": "", "label": "output_path"}),
+            },
+        }
+
+    def generate(
+        self,
+        image,
+        mode: str,
+        prompt: str,
+        model: str,
+        size: str,
+        quality: str,
+        format: str,
+        image_2=None,
+        mask=None,
+        output_path: str = "",
+    ) -> tuple:
+        if not prompt.strip():
+            raise ValueError("prompt cannot be empty")
+
+        if mode not in ("openrouter", "litellm"):
+            raise ValueError("mode must be openrouter or litellm")
+
+        if not _HAS_COMFYU:
+            raise RuntimeError("ComfyUI dependencies not available.")
+
+        input_image_urls = _collect_codex_i2i_images(
+            image=image,
+            image_2=image_2,
+            mask=mask,
+        )
+
+        img_bytes, img_path = generate_native_responses_image(
+            prompt=prompt,
+            model=model,
             size=size,
             quality=quality,
             fmt=format,
