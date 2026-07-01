@@ -55,7 +55,7 @@ This package also provides separate provider nodes:
 | Node | API target | API key |
 |------|------------|---------|
 | `OpenRouter Image (GPT Image 2)` | OpenRouter dedicated Images API | `CODEX_IMAGE_OPENROUTER_API_KEY` or `OPENROUTER_API_KEY` |
-| `Mix Codex Copycat Image I2I (GPT Image 2)` | Codex-style I2I packing, then Responses API `image_generation` tool call through OpenRouter or LiteLLM selected by `mode` | OpenRouter or LiteLLM environment variables |
+| `Mix Codex Copycat Image I2I (GPT Image 2)` | Codex-style I2I packing, then Responses API tool call through OpenRouter or LiteLLM selected by `mode` | OpenRouter or LiteLLM environment variables |
 | `LiteLLM Image (GPT Image 2)` | LiteLLM OpenAI-compatible `/v1/images/*` proxy | `CODEX_IMAGE_LITELLM_API_KEY`, `LITELLM_API_KEY`, or `LITELLM_MASTER_KEY` |
 
 Provider nodes let you enter the `model` name directly in the node. `base_url` is not shown in the UI; it defaults from environment variables:
@@ -64,6 +64,8 @@ Provider nodes let you enter the `model` name directly in the node. `base_url` i
 export OPENROUTER_API_KEY="sk-or-..."
 export CODEX_IMAGE_OPENROUTER_BASE_URL="https://openrouter.ai/api/v1/images"
 export CODEX_IMAGE_OPENROUTER_MODEL="openai/gpt-image-2"
+export CODEX_IMAGE_OPENROUTER_RESPONSES_MODEL="openai/gpt-5.2"
+export CODEX_IMAGE_OPENROUTER_IMAGE_MODEL="openai/gpt-image-2"
 
 export LITELLM_API_KEY="sk-..."
 export CODEX_IMAGE_LITELLM_BASE_URL="http://localhost:4000"
@@ -84,7 +86,7 @@ tr '\0' '\n' < /proc/$pid/environ | sed -n -E 's/^(OPENROUTER_API_KEY|CODEX_IMAG
 
 The provider nodes support prompt-only generation. If you connect `image`, `image_2`, or `mask`, they send the request as an image edit/reference-image request when the provider endpoint supports it. The prompt text is sent as entered; size, quality, and mask are represented through API fields or image alpha/multipart data instead of prompt text.
 
-`Mix Codex Copycat Image I2I (GPT Image 2)` is image-input-only and mirrors `Codex Image I2I (GPT Image 2)` reference packing: the main image is always sent, `image_2` is a second reference, and a ComfyUI `mask` is baked into the first image alpha channel. Its `mode` selects `openrouter` or `litellm`, using the same environment-variable API keys/base URLs as the dedicated provider nodes. Unlike the dedicated provider nodes, this node posts a Responses API payload with `tools: [{"type": "image_generation", ...}]` to the provider's `/responses` endpoint.
+`Mix Codex Copycat Image I2I (GPT Image 2)` is image-input-only and mirrors `Codex Image I2I (GPT Image 2)` reference packing: the main image is always sent, `image_2` is a second reference, and a ComfyUI `mask` is baked into the first image alpha channel. Its `mode` selects `openrouter` or `litellm`, using the same environment-variable API keys/base URLs as the dedicated provider nodes. Unlike the dedicated provider nodes, this node posts a Responses API payload to the provider's `/responses` endpoint: `litellm` mode uses the OpenAI-compatible `tools: [{"type": "image_generation", ...}]` shape, while `openrouter` mode uses OpenRouter's server-tool shape `tools: [{"type": "openrouter:image_generation", "parameters": {...}}]`. In `openrouter` mode, the node's `model` is the Responses model that sees the inputs and calls the tool, and `image_model` is the actual image-generation model.
 
 ---
 

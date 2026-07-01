@@ -46,6 +46,11 @@ DEFAULT_BASE_URL = os.environ.get("CODEX_IMAGE_BASE_URL", "https://chatgpt.com/b
 DEFAULT_CODEX_SCRIPT = os.environ.get("CODEX_IMAGE_SCRIPT", "~/.codex-image/scripts/codex_image.py")
 DEFAULT_OPENROUTER_BASE_URL = os.environ.get("CODEX_IMAGE_OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1/images")
 DEFAULT_OPENROUTER_MODEL = os.environ.get("CODEX_IMAGE_OPENROUTER_MODEL", "openai/gpt-image-2")
+DEFAULT_OPENROUTER_RESPONSES_MODEL = os.environ.get(
+    "CODEX_IMAGE_OPENROUTER_RESPONSES_MODEL",
+    os.environ.get("CODEX_IMAGE_OPENROUTER_CHAT_MODEL", "openai/gpt-5.2"),
+)
+DEFAULT_OPENROUTER_IMAGE_MODEL = os.environ.get("CODEX_IMAGE_OPENROUTER_IMAGE_MODEL", DEFAULT_OPENROUTER_MODEL)
 DEFAULT_LITELLM_BASE_URL = os.environ.get("CODEX_IMAGE_LITELLM_BASE_URL", "http://localhost:4000")
 DEFAULT_LITELLM_MODEL = os.environ.get("CODEX_IMAGE_LITELLM_MODEL", "gpt-image-2")
 
@@ -420,11 +425,8 @@ def _raise_api_error_if_present(events: list[dict]) -> None:
         raise RuntimeError(f"Codex image API error ({code or 'unknown'}): {message}")
 
 
-def _extract_image(events: list[dict]) -> str:
-    """Pull base64-encoded image string from parsed SSE events.
-
-    The API returns image data in three possible shapes — try all of them.
-    """
+def _extract_base64_image(events: list[dict]) -> str | None:
+    """Pull base64-encoded image string from parsed SSE events, if present."""
     for ev in events:
         if ev.get("type") == "response.image_generation_call.done":
             r = ev.get("result")
@@ -441,6 +443,110 @@ def _extract_image(events: list[dict]) -> str:
             for o in resp.get("output") or []:
                 if o.get("type") == "image_generation_call" and o.get("result"):
                     return str(o["result"])
+
+    return None
+
+
+def _extract_image(events: list[dict]) -> str:
+    """Pull base64-encoded image string from parsed SSE events.
+
+    The OpenAI-compatible Responses API returns image data in a few possible
+    shapes. This legacy helper keeps returning only base64 so older callers do
+    not accidentally treat provider URLs as direct image bytes.
+    """
+    img_b64 = _extract_base64_image(events)
+    if img_b64:
+        return img_b64
+
+    _raise_api_error_if_present(events)
+
+    tail = events[-3:] if len(events) > 3 else events
+    raise RuntimeError(
+        f"No generated image found in SSE events:\n"
+        f"{json.dumps(tail, ensure_ascii=False, indent=2)[:2000]}"
+    )
+
+
+def _extract_image_source_from_text(text: str) -> str | None:
+    data_match = re.search(r"data:image/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=\s]+", text)
+    if data_match:
+        return data_match.group(0).strip()
+
+    json_match = re.search(r'"imageUrl"\s*:\s*"([^"]+)"', text)
+    if json_match:
+        return json_match.group(1).strip()
+
+    markdown_match = re.search(r"!\[[^\]]*\]\((https?://[^)\s]+)\)", text)
+    if markdown_match:
+        return markdown_match.group(1).strip()
+
+    return None
+
+
+def _coerce_image_source(value: Any) -> str | None:
+    if isinstance(value, str):
+        return value.strip() or None
+    if isinstance(value, dict):
+        for key in ("imageUrl", "image_url", "url"):
+            source = _coerce_image_source(value.get(key))
+            if source:
+                return source
+    return None
+
+
+def _extract_provider_image_source(events: list[dict]) -> str | None:
+    """Find provider-returned image URLs such as OpenRouter's imageUrl."""
+    def walk(obj: Any) -> str | None:
+        if isinstance(obj, dict):
+            if obj.get("type") == "input_image":
+                return None
+            for key in ("imageUrl", "generated_image_url"):
+                source = _coerce_image_source(obj.get(key))
+                if source:
+                    return source
+            source = _coerce_image_source(obj.get("image_url"))
+            if source:
+                return source
+            for value in obj.values():
+                source = walk(value)
+                if source:
+                    return source
+        elif isinstance(obj, list):
+            for item in obj:
+                source = walk(item)
+                if source:
+                    return source
+        elif isinstance(obj, str):
+            return _extract_image_source_from_text(obj)
+        return None
+
+    return walk(events)
+
+
+def _image_bytes_from_source(source: str, token: str = "") -> bytes:
+    source = source.strip()
+    if source.startswith("data:"):
+        image_bytes, _ = _decode_data_url(source)
+        return image_bytes
+    try:
+        return _download_image_url(source, token="")
+    except Exception:
+        if token:
+            return _download_image_url(source, token=token)
+        raise
+
+
+def _extract_image_bytes_from_responses_events(events: list[dict], token: str = "") -> bytes:
+    img_b64 = _extract_base64_image(events)
+    if img_b64:
+        if img_b64.strip().startswith("data:"):
+            image_bytes, _ = _decode_data_url(img_b64)
+            return image_bytes
+        return base64.b64decode(img_b64)
+
+    source = _extract_provider_image_source(events)
+    if source:
+        return _image_bytes_from_source(source, token)
 
     _raise_api_error_if_present(events)
 
@@ -490,6 +596,60 @@ def _build_payload(
     }
 
 
+def _build_openrouter_responses_payload(
+    prompt: str,
+    model: str,
+    image_model: str,
+    size: str,
+    quality: str,
+    fmt: str,
+    input_image_urls: list[str] | None = None,
+) -> dict[str, Any]:
+    """Build an OpenRouter Responses payload using its server tool dialect."""
+    actual_model = (model or "").strip() or DEFAULT_OPENROUTER_RESPONSES_MODEL
+    actual_image_model = (image_model or "").strip() or DEFAULT_OPENROUTER_IMAGE_MODEL
+    input_image_urls = input_image_urls or []
+
+    parameters: dict[str, str] = {}
+    if actual_image_model:
+        parameters["model"] = actual_image_model
+    if quality:
+        parameters["quality"] = quality
+    if size:
+        parameters["size"] = size
+    if fmt:
+        parameters["output_format"] = fmt
+
+    tool: dict[str, Any] = {"type": "openrouter:image_generation"}
+    if parameters:
+        tool["parameters"] = parameters
+
+    if input_image_urls:
+        content: list[dict[str, str]] = [{"type": "input_text", "text": prompt}]
+        content.extend(
+            {"type": "input_image", "image_url": image_url}
+            for image_url in input_image_urls
+            if image_url
+        )
+        input_value: str | list[dict[str, Any]] = [
+            {"role": "user", "content": content}
+        ]
+    else:
+        input_value = prompt
+
+    return {
+        "model": actual_model,
+        "instructions": (
+            "Use the openrouter:image_generation tool to generate exactly one image "
+            "for the user's request. Do not answer with text only."
+        ),
+        "input": input_value,
+        "tools": [tool],
+        "store": False,
+        "stream": True,
+    }
+
+
 # ── API mode ──────────────────────────────────────────────────────────────────
 
 def _run_responses_image_request(
@@ -510,7 +670,7 @@ def _run_responses_image_request(
                 DEFAULT_TIMEOUT,
                 extra_headers=extra_headers,
             )
-            img_b64 = _extract_image(events)
+            img_bytes = _extract_image_bytes_from_responses_events(events, token)
             break
         except (CodexImageRateLimitError, CodexImageTransientAPIError) as exc:
             last_retryable_error = exc
@@ -540,7 +700,6 @@ def _run_responses_image_request(
     else:
         raise last_retryable_error or RuntimeError("Codex image generation failed")
 
-    img_bytes = base64.b64decode(img_b64)
     return img_bytes, _write_temp_image(img_bytes, fmt)
 
 
@@ -812,6 +971,7 @@ def generate_responses_image(
     api_key: str = "",
     input_image_urls: list[str] | None = None,
     action: str = "auto",
+    image_model: str = "",
 ) -> tuple[bytes, str]:
     """Generate an image via a Responses API image_generation tool call."""
     if not prompt.strip():
@@ -824,7 +984,7 @@ def generate_responses_image(
             ("CODEX_IMAGE_OPENROUTER_API_KEY", "OPENROUTER_API_KEY"),
             "OpenRouter",
         )
-        actual_model = (model or "").strip() or DEFAULT_OPENROUTER_MODEL
+        actual_model = (model or "").strip() or DEFAULT_OPENROUTER_RESPONSES_MODEL
         extra_headers = {}
         referer = os.environ.get("OPENROUTER_HTTP_REFERER", "").strip()
         if referer:
@@ -832,6 +992,15 @@ def generate_responses_image(
         title = os.environ.get("OPENROUTER_X_TITLE", "").strip()
         if title:
             extra_headers["X-Title"] = title
+        payload = _build_openrouter_responses_payload(
+            prompt=prompt,
+            model=actual_model,
+            image_model=image_model,
+            size=size,
+            quality=quality,
+            fmt=fmt,
+            input_image_urls=input_image_urls,
+        )
     elif mode == "litellm":
         api_url = _resolve_litellm_responses_url(base_url)
         token = _resolve_env_api_key(
@@ -849,14 +1018,15 @@ def generate_responses_image(
     else:
         raise ValueError("mode must be api, auth, openrouter, or litellm")
 
-    payload = _build_payload(
-        prompt=prompt,
-        model=actual_model,
-        size=size,
-        quality=quality,
-        input_image_urls=input_image_urls,
-        action=action,
-    )
+    if mode != "openrouter":
+        payload = _build_payload(
+            prompt=prompt,
+            model=actual_model,
+            size=size,
+            quality=quality,
+            input_image_urls=input_image_urls,
+            action=action,
+        )
     return _run_responses_image_request(
         api_url,
         token,

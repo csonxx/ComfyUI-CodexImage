@@ -117,7 +117,7 @@ class GeneratorContractsTest(unittest.TestCase):
         self.assertEqual(litellm_seen[0], "openrouter/gpt-image-2")
         self.assertEqual(litellm_seen[1], generator.DEFAULT_LITELLM_MODEL)
 
-    def test_openrouter_responses_uses_image_generation_tool_payload(self):
+    def test_openrouter_responses_uses_openrouter_server_tool_payload(self):
         seen = []
         original_run = generator._run_responses_image_request
         original_resolve_key = generator._resolve_env_api_key
@@ -140,7 +140,8 @@ class GeneratorContractsTest(unittest.TestCase):
 
             generator.generate_responses_image(
                 prompt="plain prompt",
-                model="",
+                model="openai/gpt-5.5-20260423",
+                image_model="openai/gpt-image-2",
                 size="1024x1536",
                 quality="medium",
                 fmt="png",
@@ -154,11 +155,29 @@ class GeneratorContractsTest(unittest.TestCase):
 
         self.assertEqual(seen[0]["api_url"], "https://openrouter.ai/api/v1/responses")
         self.assertEqual(seen[0]["token"], "OpenRouter-token")
-        self.assertEqual(seen[0]["payload"]["model"], generator.DEFAULT_OPENROUTER_MODEL)
-        self.assertEqual(seen[0]["payload"]["tools"][0]["type"], "image_generation")
-        self.assertEqual(seen[0]["payload"]["tools"][0]["action"], "edit")
+        self.assertEqual(seen[0]["payload"]["model"], "openai/gpt-5.5-20260423")
+        self.assertEqual(seen[0]["payload"]["tools"][0]["type"], "openrouter:image_generation")
+        self.assertEqual(seen[0]["payload"]["tools"][0]["parameters"]["model"], "openai/gpt-image-2")
+        self.assertEqual(seen[0]["payload"]["tools"][0]["parameters"]["size"], "1024x1536")
+        self.assertNotIn("action", seen[0]["payload"]["tools"][0])
         self.assertEqual(seen[0]["payload"]["input"][0]["content"][0]["text"], "plain prompt")
         self.assertEqual(seen[0]["payload"]["input"][0]["content"][1]["image_url"], "data:image/png;base64,abc")
+
+    def test_openrouter_responses_defaults_split_chat_and_image_models(self):
+        payload = generator._build_openrouter_responses_payload(
+            prompt="plain prompt",
+            model="",
+            image_model="",
+            size="1024x1536",
+            quality="medium",
+            fmt="png",
+            input_image_urls=None,
+        )
+
+        self.assertEqual(payload["model"], generator.DEFAULT_OPENROUTER_RESPONSES_MODEL)
+        self.assertEqual(payload["input"], "plain prompt")
+        self.assertEqual(payload["tools"][0]["type"], "openrouter:image_generation")
+        self.assertEqual(payload["tools"][0]["parameters"]["model"], generator.DEFAULT_OPENROUTER_IMAGE_MODEL)
 
     def test_litellm_responses_uses_image_generation_tool_payload(self):
         seen = []
@@ -203,6 +222,79 @@ class GeneratorContractsTest(unittest.TestCase):
         self.assertEqual(seen[0]["payload"]["tools"][0]["action"], "edit")
         self.assertEqual(seen[0]["payload"]["input"][0]["content"][0]["text"], "plain prompt")
         self.assertEqual(seen[0]["payload"]["input"][0]["content"][1]["image_url"], "data:image/png;base64,abc")
+
+    def test_responses_extracts_openrouter_image_url(self):
+        original_download = generator._download_image_url
+        seen = []
+
+        def fake_download(url, token=""):
+            seen.append({"url": url, "token": token})
+            return b"\x89PNG\r\n\x1a\n"
+
+        try:
+            generator._download_image_url = fake_download
+            img_bytes = generator._extract_image_bytes_from_responses_events(
+                [
+                    {
+                        "type": "response.output_item.done",
+                        "item": {
+                            "type": "tool_result",
+                            "output": {"status": "ok", "imageUrl": "https://example.test/generated.png"},
+                        },
+                    }
+                ],
+                token="provider-token",
+            )
+        finally:
+            generator._download_image_url = original_download
+
+        self.assertEqual(img_bytes, b"\x89PNG\r\n\x1a\n")
+        self.assertEqual(seen, [{"url": "https://example.test/generated.png", "token": ""}])
+
+    def test_responses_extracts_openrouter_markdown_image_url(self):
+        original_download = generator._download_image_url
+        seen = []
+
+        def fake_download(url, token=""):
+            seen.append({"url": url, "token": token})
+            return b"\x89PNG\r\n\x1a\n"
+
+        try:
+            generator._download_image_url = fake_download
+            img_bytes = generator._extract_image_bytes_from_responses_events(
+                [
+                    {
+                        "type": "response.content_part.done",
+                        "part": {
+                            "type": "output_text",
+                            "text": "Done ![image](https://example.test/generated)",
+                        },
+                    }
+                ]
+            )
+        finally:
+            generator._download_image_url = original_download
+
+        self.assertEqual(img_bytes, b"\x89PNG\r\n\x1a\n")
+        self.assertEqual(seen, [{"url": "https://example.test/generated", "token": ""}])
+
+    def test_responses_does_not_treat_input_image_as_generated_image(self):
+        with self.assertRaisesRegex(RuntimeError, "No generated image"):
+            generator._extract_image_bytes_from_responses_events(
+                [
+                    {
+                        "type": "response.completed",
+                        "response": {
+                            "input": [
+                                {
+                                    "type": "input_image",
+                                    "image_url": "data:image/png;base64,aW5wdXQ=",
+                                }
+                            ],
+                        },
+                    }
+                ]
+            )
 
 
 class NodeContractsTest(unittest.TestCase):
@@ -310,6 +402,7 @@ class NodeContractsTest(unittest.TestCase):
                 mode="openrouter",
                 prompt="plain prompt",
                 model="openai/gpt-image-2",
+                image_model="openai/gpt-image-2",
                 size="1024x1024",
                 quality="medium",
                 format="png",
@@ -326,6 +419,7 @@ class NodeContractsTest(unittest.TestCase):
         self.assertEqual(seen[0]["mode"], "openrouter")
         self.assertEqual(seen[0]["prompt"], "plain prompt")
         self.assertEqual(seen[0]["model"], "openai/gpt-image-2")
+        self.assertEqual(seen[0]["image_model"], "openai/gpt-image-2")
         self.assertEqual(
             seen[0]["input_image_urls"],
             ["data:image/png;base64,mask", "data:image/png;base64,image"],
@@ -357,6 +451,7 @@ class NodeContractsTest(unittest.TestCase):
                 mode="litellm",
                 prompt="plain prompt",
                 model="openrouter/gpt-image-2",
+                image_model="openai/gpt-image-2",
                 size="1024x1024",
                 quality="medium",
                 format="png",
@@ -372,6 +467,7 @@ class NodeContractsTest(unittest.TestCase):
         self.assertEqual(seen[0]["mode"], "litellm")
         self.assertEqual(seen[0]["prompt"], "plain prompt")
         self.assertEqual(seen[0]["model"], "openrouter/gpt-image-2")
+        self.assertEqual(seen[0]["image_model"], "openai/gpt-image-2")
         self.assertEqual(seen[0]["input_image_urls"], ["data:image/png;base64,mask"])
         self.assertEqual(seen[0]["action"], "edit")
         self.assertNotIn("mask_image_url", seen[0])
