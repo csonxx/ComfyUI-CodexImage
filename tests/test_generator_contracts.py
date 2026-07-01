@@ -202,7 +202,8 @@ class GeneratorContractsTest(unittest.TestCase):
 
             generator.generate_native_responses_image(
                 prompt="plain prompt",
-                model="gpt-5.5",
+                model="openai/gpt-5.5",
+                image_model="openai/gpt-image-2",
                 size="1024x1536",
                 quality="medium",
                 fmt="png",
@@ -216,12 +217,59 @@ class GeneratorContractsTest(unittest.TestCase):
 
         self.assertEqual(seen[0]["api_url"], "https://openrouter.ai/api/v1/responses")
         self.assertEqual(seen[0]["token"], "OpenRouter-token")
-        self.assertEqual(seen[0]["payload"]["model"], "gpt-5.5")
+        self.assertEqual(seen[0]["payload"]["model"], "openai/gpt-5.5")
+        tool = seen[0]["payload"]["tools"][0]
+        self.assertEqual(tool["type"], "image_generation")
+        self.assertEqual(tool["action"], "edit")
+        self.assertEqual(tool["parameters"]["model"], "openai/gpt-image-2")
+        self.assertEqual(tool["parameters"]["size"], "1024x1536")
+        self.assertEqual(tool["parameters"]["quality"], "medium")
+        self.assertEqual(tool["parameters"]["output_format"], "png")
+        self.assertEqual(seen[0]["payload"]["input"][0]["content"][0]["text"], "plain prompt")
+        self.assertEqual(seen[0]["payload"]["input"][0]["content"][1]["image_url"], "data:image/png;base64,abc")
+
+    def test_native_litellm_responses_keeps_plain_image_generation_tool(self):
+        seen = []
+        original_run = generator._run_responses_image_request
+        original_resolve_key = generator._resolve_env_api_key
+
+        def fake_run(api_url, token, payload, fmt, extra_headers=None):
+            seen.append(
+                {
+                    "api_url": api_url,
+                    "token": token,
+                    "payload": payload,
+                    "fmt": fmt,
+                    "extra_headers": extra_headers,
+                }
+            )
+            return b"\x89PNG\r\n\x1a\n", "/tmp/out.png"
+
+        try:
+            generator._run_responses_image_request = fake_run
+            generator._resolve_env_api_key = lambda api_key, env_names, label: f"{label}-token"
+
+            generator.generate_native_responses_image(
+                prompt="plain prompt",
+                model="openrouter/gpt-5.5",
+                image_model="openai/gpt-image-2",
+                size="1024x1536",
+                quality="medium",
+                fmt="png",
+                mode="litellm",
+                base_url="http://litellm.local/v1/images/edits",
+                input_image_urls=["data:image/png;base64,abc"],
+                action="edit",
+            )
+        finally:
+            generator._run_responses_image_request = original_run
+            generator._resolve_env_api_key = original_resolve_key
+
+        self.assertEqual(seen[0]["api_url"], "http://litellm.local/v1/responses")
+        self.assertEqual(seen[0]["token"], "LiteLLM-token")
         self.assertEqual(seen[0]["payload"]["tools"][0]["type"], "image_generation")
         self.assertEqual(seen[0]["payload"]["tools"][0]["action"], "edit")
         self.assertNotIn("parameters", seen[0]["payload"]["tools"][0])
-        self.assertEqual(seen[0]["payload"]["input"][0]["content"][0]["text"], "plain prompt")
-        self.assertEqual(seen[0]["payload"]["input"][0]["content"][1]["image_url"], "data:image/png;base64,abc")
 
     def test_litellm_responses_uses_image_generation_tool_payload(self):
         seen = []
@@ -360,6 +408,59 @@ class GeneratorContractsTest(unittest.TestCase):
                 ]
             )
 
+    def test_wavespeed_edit_submits_json_and_extracts_base64_output(self):
+        seen = []
+        original_post = generator._post_json
+        original_resolve_key = generator._resolve_env_api_key
+
+        def fake_post(url, token, payload, timeout, extra_headers=None):
+            seen.append(
+                {
+                    "url": url,
+                    "token": token,
+                    "payload": payload,
+                    "timeout": timeout,
+                    "extra_headers": extra_headers,
+                }
+            )
+            return {
+                "data": {
+                    "status": "completed",
+                    "outputs": ["iVBORw0KGgo="],
+                }
+            }
+
+        try:
+            generator._post_json = fake_post
+            generator._resolve_env_api_key = lambda api_key, env_names, label: f"{label}-token"
+
+            img_bytes, _ = generator.generate_wavespeed_edit(
+                prompt="plain prompt",
+                model="openai/gpt-image-2/edit",
+                size="1024x1536",
+                quality="medium",
+                fmt="png",
+                input_image_urls=["data:image/png;base64,abc"],
+            )
+        finally:
+            generator._post_json = original_post
+            generator._resolve_env_api_key = original_resolve_key
+
+        self.assertEqual(img_bytes, b"\x89PNG\r\n\x1a\n")
+        self.assertEqual(
+            seen[0]["url"],
+            "https://api.wavespeed.ai/api/v3/openai/gpt-image-2/edit",
+        )
+        self.assertEqual(seen[0]["token"], "WaveSpeed-token")
+        self.assertEqual(seen[0]["payload"]["prompt"], "plain prompt")
+        self.assertEqual(seen[0]["payload"]["images"], ["data:image/png;base64,abc"])
+        self.assertEqual(seen[0]["payload"]["aspect_ratio"], "2:3")
+        self.assertEqual(seen[0]["payload"]["resolution"], "1k")
+        self.assertEqual(seen[0]["payload"]["quality"], "medium")
+        self.assertEqual(seen[0]["payload"]["output_format"], "png")
+        self.assertIs(seen[0]["payload"]["enable_sync_mode"], True)
+        self.assertIs(seen[0]["payload"]["enable_base64_output"], True)
+
 
 class NodeContractsTest(unittest.TestCase):
     def test_legacy_node_class_keys_are_registered(self):
@@ -383,6 +484,14 @@ class NodeContractsTest(unittest.TestCase):
             "GPTImage2ResponseI2INode",
         )
         self.assertEqual(
+            module.NODE_CLASS_MAPPINGS["RequestyImageEditI2INode"].__name__,
+            "RequestyImageEditI2INode",
+        )
+        self.assertEqual(
+            module.NODE_CLASS_MAPPINGS["WaveSpeedImageEditI2INode"].__name__,
+            "WaveSpeedImageEditI2INode",
+        )
+        self.assertEqual(
             module.NODE_DISPLAY_NAME_MAPPINGS["OpenRouterImageNode"],
             "OpenRouter Image (GPT Image 2)",
         )
@@ -397,6 +506,14 @@ class NodeContractsTest(unittest.TestCase):
         self.assertEqual(
             module.NODE_DISPLAY_NAME_MAPPINGS["GPTImage2ResponseI2INode"],
             "GPT-Image-2 Response i2i",
+        )
+        self.assertEqual(
+            module.NODE_DISPLAY_NAME_MAPPINGS["RequestyImageEditI2INode"],
+            "Requesty I2I (gpt-image-2 edit)",
+        )
+        self.assertEqual(
+            module.NODE_DISPLAY_NAME_MAPPINGS["WaveSpeedImageEditI2INode"],
+            "WaveSpeed I2I (gpt-image-2 edit)",
         )
 
     def test_output_copy_uses_actual_image_suffix(self):
@@ -567,7 +684,8 @@ class NodeContractsTest(unittest.TestCase):
                 image=object(),
                 mode="openrouter",
                 prompt="plain prompt",
-                model="gpt-5.5",
+                model="openai/gpt-5.5",
+                image_model="openai/gpt-image-2",
                 size="1024x1024",
                 quality="medium",
                 format="png",
@@ -583,7 +701,8 @@ class NodeContractsTest(unittest.TestCase):
 
         self.assertEqual(seen[0]["mode"], "openrouter")
         self.assertEqual(seen[0]["prompt"], "plain prompt")
-        self.assertEqual(seen[0]["model"], "gpt-5.5")
+        self.assertEqual(seen[0]["model"], "openai/gpt-5.5")
+        self.assertEqual(seen[0]["image_model"], "openai/gpt-image-2")
         self.assertEqual(
             seen[0]["input_image_urls"],
             ["data:image/png;base64,mask", "data:image/png;base64,image"],

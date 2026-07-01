@@ -29,10 +29,14 @@ from generator import (
     DEFAULT_OPENROUTER_MODEL,
     DEFAULT_OPENROUTER_IMAGE_MODEL,
     DEFAULT_LITELLM_MODEL,
+    DEFAULT_REQUESTY_MODEL,
+    DEFAULT_WAVESPEED_MODEL,
     SUPPORTED_SIZES,
     generate_image,
     generate_native_responses_image,
+    generate_requesty_edit,
     generate_responses_image,
+    generate_wavespeed_edit,
 )
 
 # ComfyUI-only imports — not available in standalone CLI
@@ -512,10 +516,11 @@ class GPTImage2ResponseI2INode:
                 "image": ("IMAGE",),
                 "mode": (["openrouter", "litellm"], {"default": "openrouter", "label": "mode"}),
                 "prompt": ("STRING", {"multiline": True, "default": ""}),
-                "model": ("STRING", {"default": "gpt-5.5"}),
+                "model": ("STRING", {"default": "openai/gpt-5.5"}),
                 "size": (list(SUPPORTED_SIZES), {"default": DEFAULT_SIZE, "label": "size"}),
                 "quality": (["auto", "low", "medium", "high"], {"default": DEFAULT_QUALITY}),
                 "format": (["png", "jpeg", "webp"], {"default": DEFAULT_FORMAT}),
+                "image_model": ("STRING", {"default": DEFAULT_OPENROUTER_IMAGE_MODEL, "label": "image_model"}),
             },
             "optional": {
                 "image_2": ("IMAGE",),
@@ -533,6 +538,7 @@ class GPTImage2ResponseI2INode:
         size: str,
         quality: str,
         format: str,
+        image_model: str,
         image_2=None,
         mask=None,
         output_path: str = "",
@@ -555,12 +561,147 @@ class GPTImage2ResponseI2INode:
         img_bytes, img_path = generate_native_responses_image(
             prompt=prompt,
             model=model,
+            image_model=image_model,
             size=size,
             quality=quality,
             fmt=format,
             mode=mode,
             input_image_urls=input_image_urls,
             action="edit",
+        )
+
+        tensor = _image_bytes_to_tensor(img_bytes)
+        img_path = _write_output_copy(img_bytes, img_path, output_path, format)
+        return (tensor, img_path)
+
+
+class RequestyImageEditI2INode:
+    """Edit reference images through Requesty's gpt-image-2 Images API route."""
+
+    CATEGORY = "image/generation"
+    FUNCTION = "generate"
+    RETURN_TYPES = ("IMAGE", "STRING")
+    RETURN_NAMES = ("image", "image_path")
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+                "prompt": ("STRING", {"multiline": True, "default": ""}),
+                "model": ("STRING", {"default": DEFAULT_REQUESTY_MODEL}),
+                "size": (list(SUPPORTED_SIZES), {"default": DEFAULT_SIZE, "label": "size"}),
+                "quality": (["auto", "low", "medium", "high"], {"default": DEFAULT_QUALITY}),
+                "format": (["png", "jpeg", "webp"], {"default": DEFAULT_FORMAT}),
+            },
+            "optional": {
+                "image_2": ("IMAGE",),
+                "mask": ("MASK",),
+                "api_key": ("STRING", {"default": "", "multiline": False}),
+                "output_path": ("STRING", {"default": "", "label": "output_path"}),
+            },
+        }
+
+    def generate(
+        self,
+        image,
+        prompt: str,
+        model: str,
+        size: str,
+        quality: str,
+        format: str,
+        image_2=None,
+        mask=None,
+        api_key: str = "",
+        output_path: str = "",
+    ) -> tuple:
+        if not prompt.strip():
+            raise ValueError("prompt cannot be empty")
+
+        if not _HAS_COMFYU:
+            raise RuntimeError("ComfyUI dependencies not available.")
+
+        input_image_urls = _collect_codex_i2i_images(
+            image=image,
+            image_2=image_2,
+            mask=mask,
+        )
+
+        img_bytes, img_path = generate_requesty_edit(
+            prompt=prompt,
+            model=model,
+            size=size,
+            quality=quality,
+            fmt=format,
+            input_image_urls=input_image_urls,
+            api_key=api_key,
+        )
+
+        tensor = _image_bytes_to_tensor(img_bytes)
+        img_path = _write_output_copy(img_bytes, img_path, output_path, format)
+        return (tensor, img_path)
+
+
+class WaveSpeedImageEditI2INode:
+    """Edit reference images through WaveSpeed's gpt-image-2 edit model."""
+
+    CATEGORY = "image/generation"
+    FUNCTION = "generate"
+    RETURN_TYPES = ("IMAGE", "STRING")
+    RETURN_NAMES = ("image", "image_path")
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+                "prompt": ("STRING", {"multiline": True, "default": ""}),
+                "model": ("STRING", {"default": DEFAULT_WAVESPEED_MODEL}),
+                "size": (list(SUPPORTED_SIZES), {"default": DEFAULT_SIZE, "label": "size"}),
+                "quality": (["auto", "low", "medium", "high"], {"default": DEFAULT_QUALITY}),
+                "format": (["png", "jpeg", "webp"], {"default": DEFAULT_FORMAT}),
+            },
+            "optional": {
+                "image_2": ("IMAGE",),
+                "mask": ("MASK",),
+                "api_key": ("STRING", {"default": "", "multiline": False}),
+                "output_path": ("STRING", {"default": "", "label": "output_path"}),
+            },
+        }
+
+    def generate(
+        self,
+        image,
+        prompt: str,
+        model: str,
+        size: str,
+        quality: str,
+        format: str,
+        image_2=None,
+        mask=None,
+        api_key: str = "",
+        output_path: str = "",
+    ) -> tuple:
+        if not prompt.strip():
+            raise ValueError("prompt cannot be empty")
+
+        if not _HAS_COMFYU:
+            raise RuntimeError("ComfyUI dependencies not available.")
+
+        input_image_urls = _collect_codex_i2i_images(
+            image=image,
+            image_2=image_2,
+            mask=mask,
+        )
+
+        img_bytes, img_path = generate_wavespeed_edit(
+            prompt=prompt,
+            model=model,
+            size=size,
+            quality=quality,
+            fmt=format,
+            input_image_urls=input_image_urls,
+            api_key=api_key,
         )
 
         tensor = _image_bytes_to_tensor(img_bytes)

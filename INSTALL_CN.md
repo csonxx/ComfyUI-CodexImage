@@ -59,7 +59,7 @@ tr '\0' '\n' < /proc/$pid/environ | sed -n -E 's/^(OPENROUTER_API_KEY|CODEX_IMAG
 
 `Mix Codex Copycat Image I2I (GPT Image 2)` 只做 I2I，主图必填，并用 `mode` 选择 `openrouter` 或 `litellm`。它复用对应 provider 的环境变量 key/base URL，但图片组织方式对齐 `Codex Image I2I (GPT Image 2)`：mask 会烘到第一张图的 alpha 通道。请求会走 provider 的 `/responses` 端点。`litellm` mode 发送 OpenAI 兼容的 `tools: [{"type": "image_generation", ...}]`；`openrouter` mode 发送 OpenRouter server tool 方言 `tools: [{"type": "openrouter:image_generation", "parameters": {...}}]`。OpenRouter mode 里节点的 `model` 是负责看图和调用工具的 Responses 模型，`image_model` 是实际生图模型。
 
-`GPT-Image-2 Response i2i` 也只做 I2I，主图必填，并用 `mode` 选择 `openrouter` 或 `litellm`。它同样复用 provider 环境变量 key/base URL，但会向 `/responses` 发送原生 OpenAI-style `tools: [{"type": "image_generation", "action": "edit", ...}]`，用于复刻 Codex I2I 的 Responses tool 调用形态。
+`GPT-Image-2 Response i2i` 也只做 I2I，主图必填，并用 `mode` 选择 `openrouter` 或 `litellm`。它同样复用 provider 环境变量 key/base URL，但会向 `/responses` 发送原生 OpenAI-style `tools: [{"type": "image_generation", "action": "edit", ...}]`，用于复刻 Codex I2I 的 Responses tool 调用形态。OpenRouter mode 里，`model` 是负责看图和调用工具的 Responses 模型，`image_model` 会作为 tool 参数发送，默认是 `openai/gpt-image-2`；LiteLLM mode 保持纯原生 tool 形态并忽略 `image_model`。
 
 Mask 规则：
 

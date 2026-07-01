@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 import os
 import re
 import subprocess
@@ -53,6 +54,11 @@ DEFAULT_OPENROUTER_RESPONSES_MODEL = os.environ.get(
 DEFAULT_OPENROUTER_IMAGE_MODEL = os.environ.get("CODEX_IMAGE_OPENROUTER_IMAGE_MODEL", DEFAULT_OPENROUTER_MODEL)
 DEFAULT_LITELLM_BASE_URL = os.environ.get("CODEX_IMAGE_LITELLM_BASE_URL", "http://localhost:4000")
 DEFAULT_LITELLM_MODEL = os.environ.get("CODEX_IMAGE_LITELLM_MODEL", "gpt-image-2")
+DEFAULT_REQUESTY_BASE_URL = os.environ.get("CODEX_IMAGE_REQUESTY_BASE_URL", "https://router.requesty.ai/v1")
+DEFAULT_REQUESTY_MODEL = os.environ.get("CODEX_IMAGE_REQUESTY_MODEL", "azure/openai/gpt-image-2")
+DEFAULT_WAVESPEED_BASE_URL = os.environ.get("CODEX_IMAGE_WAVESPEED_BASE_URL", "https://api.wavespeed.ai/api/v3")
+DEFAULT_WAVESPEED_MODEL = os.environ.get("CODEX_IMAGE_WAVESPEED_MODEL", "openai/gpt-image-2/edit")
+DEFAULT_WAVESPEED_POLL_INTERVAL_SECONDS = float(os.environ.get("CODEX_IMAGE_WAVESPEED_POLL_INTERVAL_SECONDS", "2"))
 
 # Supported image sizes for GPT Image 2
 SUPPORTED_SIZES = (
@@ -193,6 +199,34 @@ def _resolve_litellm_responses_url(base_url: str) -> str:
     if base_url.endswith("/v1"):
         return f"{base_url}/responses"
     return f"{base_url}/v1/responses"
+
+
+def _resolve_requesty_edits_url(base_url: str) -> str:
+    """Resolve Requesty base URL to /images/edits."""
+    base_url = (base_url or "").strip() or DEFAULT_REQUESTY_BASE_URL
+    base_url = base_url.rstrip("/")
+    if base_url.endswith("/images/edits"):
+        return base_url
+    return f"{base_url}/images/edits"
+
+
+def _resolve_wavespeed_submit_url(base_url: str, model: str) -> str:
+    """Resolve WaveSpeed base URL and model path to a task submission URL."""
+    base_url = (base_url or "").strip() or DEFAULT_WAVESPEED_BASE_URL
+    base_url = base_url.rstrip("/")
+    model_path = ((model or "").strip() or DEFAULT_WAVESPEED_MODEL).strip("/")
+    if base_url.endswith(f"/{model_path}") or base_url.endswith("/edit"):
+        return base_url
+    return f"{base_url}/{model_path}"
+
+
+def _resolve_wavespeed_result_url(base_url: str, request_id: str) -> str:
+    """Resolve a WaveSpeed prediction result URL from a base URL and task id."""
+    base_url = (base_url or "").strip() or DEFAULT_WAVESPEED_BASE_URL
+    base_url = base_url.rstrip("/")
+    if "/api/v3/" in base_url:
+        base_url = base_url.split("/api/v3/", 1)[0] + "/api/v3"
+    return f"{base_url}/predictions/{request_id}/result"
 
 
 def _resolve_env_api_key(api_key: str, env_names: tuple[str, ...], label: str) -> str:
@@ -566,12 +600,15 @@ def _build_payload(
     quality: str,
     input_image_urls: list[str] | None = None,
     action: str = "auto",
+    tool_parameters: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the request body for the Codex Responses API."""
     actual_model = (model or "").strip() or DEFAULT_MODEL
     input_image_urls = input_image_urls or []
 
-    tool = {"type": "image_generation", "size": size, "quality": quality}
+    tool: dict[str, Any] = {"type": "image_generation", "size": size, "quality": quality}
+    if tool_parameters:
+        tool["parameters"] = tool_parameters
     if input_image_urls:
         tool["action"] = action or "edit"
         content: list[dict[str, str]] = [{"type": "input_text", "text": prompt}]
@@ -784,6 +821,43 @@ def _post_json(
         return json.loads(text)
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"POST {url} returned non-JSON response:\n{text[:2000]}") from exc
+
+
+def _get_json(
+    url: str,
+    token: str,
+    timeout: int,
+    extra_headers: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """GET JSON from a provider endpoint."""
+    from urllib import error, request
+
+    headers = {"Authorization": f"Bearer {token}"}
+    headers.update(extra_headers or {})
+
+    req = request.Request(url, headers=headers, method="GET")
+    try:
+        with request.urlopen(req, timeout=timeout) as resp:
+            text = resp.read().decode("utf-8", errors="replace")
+    except error.HTTPError as exc:
+        body_text = exc.read().decode("utf-8", errors="replace")
+        body_text = _augment_http_error_message(url, exc.code, body_text)
+        msg = f"GET {url} failed: status={exc.code}\n{body_text}"
+        _log_error(msg, exc)
+        if exc.code == 429:
+            raise CodexImageRateLimitError(msg, _parse_retry_after_seconds(body_text)) from exc
+        if exc.code >= 500:
+            raise CodexImageTransientAPIError(str(exc.code), msg) from exc
+        raise RuntimeError(msg) from exc
+    except error.URLError as exc:
+        msg = f"GET {url} failed: {exc}"
+        _log_error(msg, exc)
+        raise RuntimeError(msg) from exc
+
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"GET {url} returned non-JSON response:\n{text[:2000]}") from exc
 
 
 def _post_multipart(
@@ -1039,6 +1113,7 @@ def generate_responses_image(
 def generate_native_responses_image(
     prompt: str,
     model: str = "",
+    image_model: str = "",
     size: str = DEFAULT_SIZE,
     quality: str = DEFAULT_QUALITY,
     fmt: str = DEFAULT_FORMAT,
@@ -1067,6 +1142,13 @@ def generate_native_responses_image(
         title = os.environ.get("OPENROUTER_X_TITLE", "").strip()
         if title:
             extra_headers["X-Title"] = title
+        actual_image_model = (image_model or "").strip() or DEFAULT_OPENROUTER_IMAGE_MODEL
+        tool_parameters = {
+            "model": actual_image_model,
+            "size": size,
+            "quality": quality,
+            "output_format": fmt,
+        }
     elif mode == "litellm":
         api_url = _resolve_litellm_responses_url(base_url)
         token = _resolve_env_api_key(
@@ -1076,11 +1158,13 @@ def generate_native_responses_image(
         )
         actual_model = _normalize_litellm_model(model)
         extra_headers = {}
+        tool_parameters = None
     elif mode in ("api", "auth"):
         api_url = _resolve_api_url(base_url or DEFAULT_BASE_URL)
         token = _resolve_api_key("" if mode == "auth" else api_key)
         actual_model = (model or "").strip() or DEFAULT_MODEL
         extra_headers = {}
+        tool_parameters = None
     else:
         raise ValueError("mode must be api, auth, openrouter, or litellm")
 
@@ -1091,6 +1175,7 @@ def generate_native_responses_image(
         quality=quality,
         input_image_urls=input_image_urls,
         action=action,
+        tool_parameters=tool_parameters,
     )
     return _run_responses_image_request(
         api_url,
@@ -1137,6 +1222,244 @@ def _data_urls_to_multipart_files(
         files.append(("mask", f"mask.{ext}", mask_bytes, media_type))
 
     return files
+
+
+def _requesty_image_urls_to_multipart_files(
+    input_image_urls: list[str],
+) -> list[tuple[str, str, bytes, str]]:
+    image_urls = [image_url for image_url in input_image_urls if image_url]
+    files: list[tuple[str, str, bytes, str]] = []
+    field_name = "image" if len(image_urls) == 1 else "image[]"
+
+    for idx, image_url in enumerate(image_urls):
+        if image_url.startswith("data:"):
+            image_bytes, media_type = _decode_data_url(image_url)
+        else:
+            image_bytes = _download_image_url(image_url)
+            ext = _image_extension_from_bytes(image_bytes, "png")
+            media_type = "image/jpeg" if ext in ("jpg", "jpeg") else f"image/{ext}"
+        ext = _image_extension_from_bytes(image_bytes, media_type.rsplit("/", 1)[-1])
+        files.append((field_name, f"image_{idx}.{ext}", image_bytes, media_type))
+
+    return files
+
+
+def generate_requesty_edit(
+    prompt: str,
+    model: str = DEFAULT_REQUESTY_MODEL,
+    size: str = DEFAULT_SIZE,
+    quality: str = DEFAULT_QUALITY,
+    fmt: str = DEFAULT_FORMAT,
+    input_image_urls: list[str] | None = None,
+    api_key: str = "",
+    base_url: str = DEFAULT_REQUESTY_BASE_URL,
+) -> tuple[bytes, str]:
+    """Edit reference images through Requesty's OpenAI-compatible Images API."""
+    if not prompt.strip():
+        raise ValueError("prompt cannot be empty")
+
+    input_image_urls = input_image_urls or []
+    if not any(input_image_urls):
+        raise ValueError("Requesty image edit requires at least one input image")
+
+    url = _resolve_requesty_edits_url(base_url)
+    token = _resolve_env_api_key(api_key, ("REQUESTY_API_KEY",), "Requesty")
+    fields = {
+        "model": (model or "").strip() or DEFAULT_REQUESTY_MODEL,
+        "prompt": prompt,
+        "size": size,
+        "quality": quality,
+        "output_format": fmt,
+        "n": "1",
+    }
+    files = _requesty_image_urls_to_multipart_files(input_image_urls)
+    response = _post_multipart(url, token, fields, files, DEFAULT_TIMEOUT)
+
+    data = response.get("data")
+    if not isinstance(data, list) or not data or not isinstance(data[0], dict):
+        raise RuntimeError(
+            "Requesty image edit response did not contain data[0]:\n"
+            f"{json.dumps(response, ensure_ascii=False, indent=2)[:2000]}"
+        )
+
+    b64_json = data[0].get("b64_json")
+    if not b64_json:
+        raise RuntimeError(
+            "Requesty image edit response did not contain data[0].b64_json:\n"
+            f"{json.dumps(data[0], ensure_ascii=False, indent=2)[:2000]}"
+        )
+
+    img_bytes = base64.b64decode(str(b64_json))
+    return img_bytes, _write_temp_image(img_bytes, fmt)
+
+
+def _wavespeed_aspect_ratio_from_size(size: str) -> str:
+    """Map a pixel size string to WaveSpeed's supported aspect_ratio values."""
+    match = re.match(r"^\s*(\d+)\s*[x*]\s*(\d+)\s*$", size or "")
+    if not match:
+        return "auto"
+    width = int(match.group(1))
+    height = int(match.group(2))
+    if width <= 0 or height <= 0:
+        return "auto"
+
+    divisor = math.gcd(width, height)
+    ratio = f"{width // divisor}:{height // divisor}"
+    supported = {"1:1", "3:2", "2:3", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"}
+    if ratio in supported:
+        return ratio
+
+    target = width / height
+    return min(
+        supported,
+        key=lambda item: abs((int(item.split(":", 1)[0]) / int(item.split(":", 1)[1])) - target),
+    )
+
+
+def _wavespeed_resolution_from_size(size: str) -> str:
+    """Map a pixel size string to WaveSpeed's 1k/2k/4k resolution knob."""
+    match = re.match(r"^\s*(\d+)\s*[x*]\s*(\d+)\s*$", size or "")
+    if not match:
+        return "1k"
+    longest = max(int(match.group(1)), int(match.group(2)))
+    if longest >= 3000:
+        return "4k"
+    if longest >= 1800:
+        return "2k"
+    return "1k"
+
+
+def _decode_output_image_value(value: Any, token: str = "") -> bytes:
+    """Decode a provider output value that may be base64, a data URL, or a URL."""
+    if isinstance(value, dict):
+        for key in ("b64_json", "base64", "url"):
+            if value.get(key):
+                return _decode_output_image_value(value[key], token=token)
+        raise RuntimeError(f"Unsupported image output object: {value!r}")
+
+    output = str(value or "").strip()
+    if not output:
+        raise RuntimeError("Image output was empty")
+    if output.startswith("data:"):
+        img_bytes, _ = _decode_data_url(output)
+        return img_bytes
+    if output.startswith(("http://", "https://")):
+        return _download_image_url(output, token="")
+
+    try:
+        return base64.b64decode("".join(output.split()), validate=True)
+    except Exception as exc:
+        raise RuntimeError(f"Unsupported image output value: {output[:200]}") from exc
+
+
+def _extract_wavespeed_image_bytes(response: dict[str, Any], token: str) -> bytes | None:
+    data = response.get("data")
+    if not isinstance(data, dict):
+        return None
+
+    outputs = data.get("outputs")
+    if isinstance(outputs, list) and outputs:
+        return _decode_output_image_value(outputs[0], token=token)
+    if isinstance(outputs, str) and outputs:
+        return _decode_output_image_value(outputs, token=token)
+
+    output = data.get("output")
+    if output:
+        return _decode_output_image_value(output, token=token)
+
+    return None
+
+
+def _wait_for_wavespeed_result(
+    response: dict[str, Any],
+    token: str,
+    base_url: str,
+    timeout: int,
+) -> bytes:
+    started = time.time()
+    current = response
+
+    while True:
+        img_bytes = _extract_wavespeed_image_bytes(current, token)
+        if img_bytes:
+            return img_bytes
+
+        data = current.get("data")
+        if not isinstance(data, dict):
+            raise RuntimeError(
+                "WaveSpeed response did not contain data object:\n"
+                f"{json.dumps(current, ensure_ascii=False, indent=2)[:2000]}"
+            )
+
+        status = str(data.get("status") or "").strip().lower()
+        if status == "failed":
+            raise RuntimeError(
+                "WaveSpeed generation failed:\n"
+                f"{json.dumps(data, ensure_ascii=False, indent=2)[:2000]}"
+            )
+
+        urls = data.get("urls") if isinstance(data.get("urls"), dict) else {}
+        result_url = str(urls.get("get") or "").strip()
+        request_id = str(data.get("id") or "").strip()
+        if not result_url and request_id:
+            result_url = _resolve_wavespeed_result_url(base_url, request_id)
+
+        if not result_url:
+            raise RuntimeError(
+                "WaveSpeed response did not contain outputs or a result URL:\n"
+                f"{json.dumps(current, ensure_ascii=False, indent=2)[:2000]}"
+            )
+
+        if time.time() - started >= timeout:
+            raise TimeoutError(
+                f"WaveSpeed generation timed out after {timeout}s; last status={status or 'unknown'}"
+            )
+
+        time.sleep(max(0.25, DEFAULT_WAVESPEED_POLL_INTERVAL_SECONDS))
+        current = _get_json(result_url, token, timeout)
+
+
+def generate_wavespeed_edit(
+    prompt: str,
+    model: str = DEFAULT_WAVESPEED_MODEL,
+    size: str = DEFAULT_SIZE,
+    quality: str = DEFAULT_QUALITY,
+    fmt: str = DEFAULT_FORMAT,
+    input_image_urls: list[str] | None = None,
+    api_key: str = "",
+    base_url: str = DEFAULT_WAVESPEED_BASE_URL,
+) -> tuple[bytes, str]:
+    """Edit reference images through WaveSpeed's GPT Image 2 edit prediction API."""
+    if not prompt.strip():
+        raise ValueError("prompt cannot be empty")
+
+    input_image_urls = [image_url for image_url in (input_image_urls or []) if image_url]
+    if not input_image_urls:
+        raise ValueError("WaveSpeed image edit requires at least one input image")
+
+    actual_model = ((model or "").strip() or DEFAULT_WAVESPEED_MODEL).strip("/")
+    url = _resolve_wavespeed_submit_url(base_url, actual_model)
+    token = _resolve_env_api_key(
+        api_key,
+        ("CODEX_IMAGE_WAVESPEED_API_KEY", "WAVESPEED_API_KEY"),
+        "WaveSpeed",
+    )
+
+    payload: dict[str, Any] = {
+        "prompt": prompt,
+        "images": input_image_urls,
+        "aspect_ratio": _wavespeed_aspect_ratio_from_size(size),
+        "resolution": _wavespeed_resolution_from_size(size),
+        "output_format": fmt,
+        "enable_sync_mode": True,
+        "enable_base64_output": True,
+    }
+    if quality and quality != "auto":
+        payload["quality"] = quality
+
+    response = _post_json(url, token, payload, DEFAULT_TIMEOUT)
+    img_bytes = _wait_for_wavespeed_result(response, token, base_url, DEFAULT_TIMEOUT)
+    return img_bytes, _write_temp_image(img_bytes, fmt)
 
 
 def _generate_litellm(

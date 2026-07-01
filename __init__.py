@@ -5,6 +5,8 @@ from .codex_image_node import (
     LiteLLMImageNode,
     MixCodexCopycatImageI2INode,
     OpenRouterImageNode,
+    RequestyImageEditI2INode,
+    WaveSpeedImageEditI2INode,
 )
 
 NODE_CLASS_MAPPINGS = {
@@ -13,6 +15,8 @@ NODE_CLASS_MAPPINGS = {
     "OpenRouterImageNode": OpenRouterImageNode,
     "MixCodexCopycatImageI2INode": MixCodexCopycatImageI2INode,
     "GPTImage2ResponseI2INode": GPTImage2ResponseI2INode,
+    "RequestyImageEditI2INode": RequestyImageEditI2INode,
+    "WaveSpeedImageEditI2INode": WaveSpeedImageEditI2INode,
     "LiteLLMImageNode": LiteLLMImageNode,
 }
 
@@ -22,6 +26,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "OpenRouterImageNode": "OpenRouter Image (GPT Image 2)",
     "MixCodexCopycatImageI2INode": "Mix Codex Copycat Image I2I (GPT Image 2)",
     "GPTImage2ResponseI2INode": "GPT-Image-2 Response i2i",
+    "RequestyImageEditI2INode": "Requesty I2I (gpt-image-2 edit)",
+    "WaveSpeedImageEditI2INode": "WaveSpeed I2I (gpt-image-2 edit)",
     "LiteLLMImageNode": "LiteLLM Image (GPT Image 2)",
 }
 
