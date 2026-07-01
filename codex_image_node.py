@@ -30,7 +30,6 @@ from generator import (
     DEFAULT_OPENROUTER_IMAGE_MODEL,
     DEFAULT_LITELLM_MODEL,
     DEFAULT_REQUESTY_MODEL,
-    DEFAULT_REQUESTY_RESPONSES_MODEL,
     DEFAULT_WAVESPEED_MODEL,
     SUPPORTED_SIZES,
     generate_image,
@@ -636,75 +635,6 @@ class RequestyImageEditI2INode:
             fmt=format,
             input_image_urls=input_image_urls,
             api_key=api_key,
-        )
-
-        tensor = _image_bytes_to_tensor(img_bytes)
-        img_path = _write_output_copy(img_bytes, img_path, output_path, format)
-        return (tensor, img_path)
-
-
-class RequestyResponseI2INode:
-    """Use Requesty's native Responses route with image_generation action=edit."""
-
-    CATEGORY = "image/generation"
-    FUNCTION = "generate"
-    RETURN_TYPES = ("IMAGE", "STRING")
-    RETURN_NAMES = ("image", "image_path")
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "image": ("IMAGE",),
-                "prompt": ("STRING", {"multiline": True, "default": ""}),
-                "model": ("STRING", {"default": DEFAULT_REQUESTY_RESPONSES_MODEL}),
-                "size": (list(SUPPORTED_SIZES), {"default": DEFAULT_SIZE, "label": "size"}),
-                "quality": (["auto", "low", "medium", "high"], {"default": DEFAULT_QUALITY}),
-                "format": (["png", "jpeg", "webp"], {"default": DEFAULT_FORMAT}),
-            },
-            "optional": {
-                "image_2": ("IMAGE",),
-                "mask": ("MASK",),
-                "api_key": ("STRING", {"default": "", "multiline": False}),
-                "output_path": ("STRING", {"default": "", "label": "output_path"}),
-            },
-        }
-
-    def generate(
-        self,
-        image,
-        prompt: str,
-        model: str,
-        size: str,
-        quality: str,
-        format: str,
-        image_2=None,
-        mask=None,
-        api_key: str = "",
-        output_path: str = "",
-    ) -> tuple:
-        if not prompt.strip():
-            raise ValueError("prompt cannot be empty")
-
-        if not _HAS_COMFYU:
-            raise RuntimeError("ComfyUI dependencies not available.")
-
-        input_image_urls = _collect_codex_i2i_images(
-            image=image,
-            image_2=image_2,
-            mask=mask,
-        )
-
-        img_bytes, img_path = generate_native_responses_image(
-            prompt=prompt,
-            model=model,
-            size=size,
-            quality=quality,
-            fmt=format,
-            mode="requesty",
-            api_key=api_key,
-            input_image_urls=input_image_urls,
-            action="edit",
         )
 
         tensor = _image_bytes_to_tensor(img_bytes)
