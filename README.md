@@ -58,6 +58,7 @@ This package also provides separate provider nodes:
 | `Mix Codex Copycat Image I2I (GPT Image 2)` | Codex-style I2I packing, then Responses API tool call through OpenRouter or LiteLLM selected by `mode` | OpenRouter or LiteLLM environment variables |
 | `GPT-Image-2 Response i2i` | Codex-style I2I packing, then native Responses `image_generation` + `action=edit` through OpenRouter or LiteLLM selected by `mode` | OpenRouter or LiteLLM environment variables |
 | `Requesty I2I (gpt-image-2 edit)` | Requesty OpenAI-compatible `/v1/images/edits` multipart edit route | Optional node `api_key`, then `REQUESTY_API_KEY` |
+| `Requesty Response I2I (GPT Image 2)` | Codex-style I2I packing, then Requesty `/v1/responses` with native `image_generation` + `action=edit` | Optional node `api_key`, then `REQUESTY_API_KEY` |
 | `WaveSpeed I2I (gpt-image-2 edit)` | WaveSpeed `openai/gpt-image-2/edit` prediction API | Optional node `api_key`, then `CODEX_IMAGE_WAVESPEED_API_KEY` or `WAVESPEED_API_KEY` |
 | `LiteLLM Image (GPT Image 2)` | LiteLLM OpenAI-compatible `/v1/images/*` proxy | `CODEX_IMAGE_LITELLM_API_KEY`, `LITELLM_API_KEY`, or `LITELLM_MASTER_KEY` |
 
@@ -77,6 +78,7 @@ export CODEX_IMAGE_LITELLM_MODEL="gpt-image-2"
 export REQUESTY_API_KEY="sk-..."
 export CODEX_IMAGE_REQUESTY_BASE_URL="https://router.requesty.ai/v1"
 export CODEX_IMAGE_REQUESTY_MODEL="azure/openai/gpt-image-2"
+export CODEX_IMAGE_REQUESTY_RESPONSES_MODEL="openai-responses/gpt-5.5"
 
 export WAVESPEED_API_KEY="ws_..."
 export CODEX_IMAGE_WAVESPEED_BASE_URL="https://api.wavespeed.ai/api/v3"
@@ -102,6 +104,8 @@ The OpenRouter and LiteLLM provider nodes support prompt-only generation. If you
 `GPT-Image-2 Response i2i` is also image-input-only and uses the same Codex I2I image packing. Its `mode` selects `openrouter` or `litellm`, but both modes post a native OpenAI-style Responses payload with `tools: [{"type": "image_generation", "action": "edit", ...}]`. This node is meant to copy the Codex I2I Responses tool-call shape. In `openrouter` mode, `model` is the Responses model that sees the inputs and calls the tool, while `image_model` is sent as the OpenRouter tool parameter so the actual generator stays on `openai/gpt-image-2` instead of OpenRouter's default image tool model. LiteLLM mode keeps the plain native tool shape and ignores `image_model`. OpenRouter currently normalizes the returned item to `openrouter:image_generation`, so the node extracts either its `result` base64 data or `imageUrl`.
 
 `Requesty I2I (gpt-image-2 edit)` is image-input-only and posts real multipart form data to Requesty's `/images/edits` route. The default model is `azure/openai/gpt-image-2`; a single reference image is sent as `image`, and multiple references are sent as repeated `image[]` file parts. The generated image is read from `data[0].b64_json`.
+
+`Requesty Response I2I (GPT Image 2)` is the Requesty path intended to mirror `Codex Image I2I (GPT Image 2)` most closely. It uses the same Codex I2I image packing, then posts a native Responses payload to `https://router.requesty.ai/v1/responses` with `tools: [{"type": "image_generation", "action": "edit", ...}]`. Its default `model` is `openai-responses/gpt-5.5`; keep the `openai-responses/` prefix for full Requesty Responses parity, because the plain `openai/` prefix can route through Chat Completions.
 
 `WaveSpeed I2I (gpt-image-2 edit)` is image-input-only and posts JSON to WaveSpeed's `openai/gpt-image-2/edit` prediction API. It sends the Codex-packed reference images as the `images` array, enables sync mode and base64 output, and maps the node's pixel `size` to WaveSpeed's `aspect_ratio` plus `resolution` settings before decoding the returned output.
 
@@ -245,6 +249,7 @@ All read at import time:
 | `CODEX_IMAGE_LITELLM_API_KEY` / `LITELLM_API_KEY` / `LITELLM_MASTER_KEY` | _(empty)_ | LiteLLM proxy API key |
 | `CODEX_IMAGE_REQUESTY_BASE_URL` | `https://router.requesty.ai/v1` | Requesty OpenAI-compatible base URL |
 | `CODEX_IMAGE_REQUESTY_MODEL` | `azure/openai/gpt-image-2` | Default model for the Requesty edit node |
+| `CODEX_IMAGE_REQUESTY_RESPONSES_MODEL` | `openai-responses/gpt-5.5` | Default model for the Requesty Responses I2I node |
 | `REQUESTY_API_KEY` | _(empty)_ | Requesty API key |
 | `CODEX_IMAGE_WAVESPEED_BASE_URL` | `https://api.wavespeed.ai/api/v3` | WaveSpeed API v3 base URL |
 | `CODEX_IMAGE_WAVESPEED_MODEL` | `openai/gpt-image-2/edit` | Default model path for the WaveSpeed edit node |

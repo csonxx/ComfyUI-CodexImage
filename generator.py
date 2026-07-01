@@ -56,6 +56,10 @@ DEFAULT_LITELLM_BASE_URL = os.environ.get("CODEX_IMAGE_LITELLM_BASE_URL", "http:
 DEFAULT_LITELLM_MODEL = os.environ.get("CODEX_IMAGE_LITELLM_MODEL", "gpt-image-2")
 DEFAULT_REQUESTY_BASE_URL = os.environ.get("CODEX_IMAGE_REQUESTY_BASE_URL", "https://router.requesty.ai/v1")
 DEFAULT_REQUESTY_MODEL = os.environ.get("CODEX_IMAGE_REQUESTY_MODEL", "azure/openai/gpt-image-2")
+DEFAULT_REQUESTY_RESPONSES_MODEL = os.environ.get(
+    "CODEX_IMAGE_REQUESTY_RESPONSES_MODEL",
+    "openai-responses/gpt-5.5",
+)
 DEFAULT_WAVESPEED_BASE_URL = os.environ.get("CODEX_IMAGE_WAVESPEED_BASE_URL", "https://api.wavespeed.ai/api/v3")
 DEFAULT_WAVESPEED_MODEL = os.environ.get("CODEX_IMAGE_WAVESPEED_MODEL", "openai/gpt-image-2/edit")
 DEFAULT_WAVESPEED_POLL_INTERVAL_SECONDS = float(os.environ.get("CODEX_IMAGE_WAVESPEED_POLL_INTERVAL_SECONDS", "2"))
@@ -208,6 +212,19 @@ def _resolve_requesty_edits_url(base_url: str) -> str:
     if base_url.endswith("/images/edits"):
         return base_url
     return f"{base_url}/images/edits"
+
+
+def _resolve_requesty_responses_url(base_url: str) -> str:
+    """Resolve Requesty base URL to /responses."""
+    base_url = (base_url or "").strip() or DEFAULT_REQUESTY_BASE_URL
+    base_url = base_url.rstrip("/")
+    if base_url.endswith("/responses"):
+        return base_url
+    if base_url.endswith("/images"):
+        return base_url.rsplit("/", 1)[0] + "/responses"
+    if base_url.endswith("/images/edits") or base_url.endswith("/images/generations"):
+        return base_url.rsplit("/", 2)[0] + "/responses"
+    return f"{base_url}/responses"
 
 
 def _resolve_wavespeed_submit_url(base_url: str, model: str) -> str:
@@ -1117,7 +1134,7 @@ def generate_native_responses_image(
     size: str = DEFAULT_SIZE,
     quality: str = DEFAULT_QUALITY,
     fmt: str = DEFAULT_FORMAT,
-    mode: Literal["api", "auth", "openrouter", "litellm"] = "openrouter",
+    mode: Literal["api", "auth", "openrouter", "litellm", "requesty"] = "openrouter",
     base_url: str = "",
     api_key: str = "",
     input_image_urls: list[str] | None = None,
@@ -1159,6 +1176,12 @@ def generate_native_responses_image(
         actual_model = _normalize_litellm_model(model)
         extra_headers = {}
         tool_parameters = None
+    elif mode == "requesty":
+        api_url = _resolve_requesty_responses_url(base_url)
+        token = _resolve_env_api_key(api_key, ("REQUESTY_API_KEY",), "Requesty")
+        actual_model = (model or "").strip() or DEFAULT_REQUESTY_RESPONSES_MODEL
+        extra_headers = {}
+        tool_parameters = None
     elif mode in ("api", "auth"):
         api_url = _resolve_api_url(base_url or DEFAULT_BASE_URL)
         token = _resolve_api_key("" if mode == "auth" else api_key)
@@ -1166,7 +1189,7 @@ def generate_native_responses_image(
         extra_headers = {}
         tool_parameters = None
     else:
-        raise ValueError("mode must be api, auth, openrouter, or litellm")
+        raise ValueError("mode must be api, auth, openrouter, litellm, or requesty")
 
     payload = _build_payload(
         prompt=prompt,
