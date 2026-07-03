@@ -492,6 +492,10 @@ class NodeContractsTest(unittest.TestCase):
             "WaveSpeedImageEditI2INode",
         )
         self.assertEqual(
+            module.NODE_CLASS_MAPPINGS["ComfyProxyValueOutput"].__name__,
+            "ComfyProxyValueOutput",
+        )
+        self.assertEqual(
             module.NODE_DISPLAY_NAME_MAPPINGS["OpenRouterImageNode"],
             "OpenRouter Image (GPT Image 2)",
         )
@@ -515,6 +519,14 @@ class NodeContractsTest(unittest.TestCase):
             module.NODE_DISPLAY_NAME_MAPPINGS["WaveSpeedImageEditI2INode"],
             "WaveSpeed I2I (gpt-image-2 edit)",
         )
+        self.assertEqual(
+            module.NODE_DISPLAY_NAME_MAPPINGS["ComfyProxyValueOutput"],
+            "ComfyProxy Value Output",
+        )
+
+    def test_comfyproxy_value_output_history_payload(self):
+        result = codex_image_node.ComfyProxyValueOutput().save("hello")
+        self.assertEqual(result, {"ui": {"comfyproxy_value": ["hello"]}})
 
     def test_output_copy_uses_actual_image_suffix(self):
         with tempfile.TemporaryDirectory() as tmpdir:

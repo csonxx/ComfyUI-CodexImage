@@ -775,6 +775,28 @@ class LiteLLMImageNode:
         return (tensor, img_path)
 
 
+class ComfyProxyValueOutput:
+    """Internal output node used by comfyproxy staged preprocessing."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "value": ("STRING", {"forceInput": True, "multiline": True}),
+            }
+        }
+
+    RETURN_TYPES = ()
+    FUNCTION = "save"
+    OUTPUT_NODE = True
+    CATEGORY = "CodexImage/internal"
+
+    def save(self, value: str):
+        if value is None:
+            value = ""
+        return {"ui": {"comfyproxy_value": [str(value)]}}
+
+
 # ── Standalone CLI (uses generator.py directly — no torch needed) ─────────────
 
 if __name__ == "__main__":

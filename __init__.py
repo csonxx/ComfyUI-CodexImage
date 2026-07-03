@@ -1,4 +1,5 @@
 from .codex_image_node import (
+    ComfyProxyValueOutput,
     CodexImageI2INode,
     CodexImageNode,
     GPTImage2ResponseI2INode,
@@ -18,6 +19,7 @@ NODE_CLASS_MAPPINGS = {
     "RequestyImageEditI2INode": RequestyImageEditI2INode,
     "WaveSpeedImageEditI2INode": WaveSpeedImageEditI2INode,
     "LiteLLMImageNode": LiteLLMImageNode,
+    "ComfyProxyValueOutput": ComfyProxyValueOutput,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -29,6 +31,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "RequestyImageEditI2INode": "Requesty I2I (gpt-image-2 edit)",
     "WaveSpeedImageEditI2INode": "WaveSpeed I2I (gpt-image-2 edit)",
     "LiteLLMImageNode": "LiteLLM Image (GPT Image 2)",
+    "ComfyProxyValueOutput": "ComfyProxy Value Output",
 }
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
