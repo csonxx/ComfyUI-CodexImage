@@ -26,14 +26,19 @@ from generator import (
     DEFAULT_QUALITY,
     DEFAULT_FORMAT,
     DEFAULT_BASE_URL,
+    DEFAULT_OPENROUTER_GEMINI_MODEL,
     DEFAULT_OPENROUTER_MODEL,
     DEFAULT_OPENROUTER_IMAGE_MODEL,
     DEFAULT_LITELLM_MODEL,
     DEFAULT_REQUESTY_MODEL,
     DEFAULT_WAVESPEED_MODEL,
+    SUPPORTED_OPENROUTER_GEMINI_ASPECT_RATIOS,
+    SUPPORTED_OPENROUTER_GEMINI_MODELS,
+    SUPPORTED_OPENROUTER_GEMINI_RESOLUTIONS,
     SUPPORTED_SIZES,
     generate_image,
     generate_native_responses_image,
+    generate_openrouter_gemini_image,
     generate_requesty_edit,
     generate_responses_image,
     generate_wavespeed_edit,
@@ -424,6 +429,79 @@ class OpenRouterImageNode:
 
         tensor = _image_bytes_to_tensor(img_bytes)
         img_path = _write_output_copy(img_bytes, img_path, output_path, format)
+        return (tensor, img_path)
+
+
+class OpenRouterGeminiImageNode:
+    """Generate or edit images through OpenRouter Gemini image models."""
+
+    CATEGORY = "image/generation"
+    FUNCTION = "generate"
+    RETURN_TYPES = ("IMAGE", "STRING")
+    RETURN_NAMES = ("image", "image_path")
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "prompt": ("STRING", {"multiline": True, "default": ""}),
+                "model": (list(SUPPORTED_OPENROUTER_GEMINI_MODELS), {"default": DEFAULT_OPENROUTER_GEMINI_MODEL}),
+                "resolution": (
+                    list(SUPPORTED_OPENROUTER_GEMINI_RESOLUTIONS),
+                    {"default": "auto", "label": "resolution"},
+                ),
+                "aspect_ratio": (
+                    list(SUPPORTED_OPENROUTER_GEMINI_ASPECT_RATIOS),
+                    {"default": "1:1", "label": "aspect_ratio"},
+                ),
+            },
+            "optional": {
+                "image": ("IMAGE",),
+                "image_2": ("IMAGE",),
+                "mask": ("MASK",),
+                "output_path": ("STRING", {"default": "", "label": "output_path"}),
+            },
+        }
+
+    def generate(
+        self,
+        prompt: str,
+        model: str,
+        resolution: str,
+        aspect_ratio: str,
+        image=None,
+        image_2=None,
+        mask=None,
+        output_path: str = "",
+    ) -> tuple:
+        if not prompt.strip():
+            raise ValueError("prompt cannot be empty")
+
+        if not _HAS_COMFYU:
+            raise RuntimeError("ComfyUI dependencies not available.")
+
+        input_image_urls: list[str] = []
+        if image is None:
+            if mask is not None:
+                raise ValueError("mask requires image")
+        elif mask is not None:
+            input_image_urls.append(_image_tensor_and_mask_to_data_url(image, mask))
+        else:
+            input_image_urls.append(_image_tensor_to_data_url(image))
+
+        if image_2 is not None:
+            input_image_urls.append(_image_tensor_to_data_url(image_2))
+
+        img_bytes, img_path = generate_openrouter_gemini_image(
+            prompt=prompt,
+            model=model,
+            resolution=resolution,
+            aspect_ratio=aspect_ratio,
+            input_image_urls=input_image_urls,
+        )
+
+        tensor = _image_bytes_to_tensor(img_bytes)
+        img_path = _write_output_copy(img_bytes, img_path, output_path, DEFAULT_FORMAT)
         return (tensor, img_path)
 
 

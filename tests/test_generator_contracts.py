@@ -41,6 +41,45 @@ class GeneratorContractsTest(unittest.TestCase):
         self.assertEqual(payload["size"], "1024x1536")
         self.assertEqual(payload["output_format"], "png")
 
+    def test_openrouter_gemini_payload_uses_gemini_fields_only(self):
+        payload = generator._build_openrouter_gemini_payload(
+            prompt="plain prompt",
+            model="google/gemini-3.1-flash-image",
+            resolution="2k",
+            aspect_ratio="16:9",
+            input_image_urls=["data:image/png;base64,abc"],
+        )
+
+        self.assertEqual(payload["model"], "google/gemini-3.1-flash-image")
+        self.assertEqual(payload["prompt"], "plain prompt")
+        self.assertEqual(payload["resolution"], "2K")
+        self.assertEqual(payload["aspect_ratio"], "16:9")
+        self.assertEqual(
+            payload["input_references"],
+            [{"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}],
+        )
+        self.assertNotIn("size", payload)
+        self.assertNotIn("quality", payload)
+        self.assertNotIn("background", payload)
+        self.assertNotIn("output_format", payload)
+
+    def test_openrouter_gemini_payload_validates_model_capabilities(self):
+        with self.assertRaisesRegex(ValueError, "does not support resolution"):
+            generator._build_openrouter_gemini_payload(
+                prompt="plain prompt",
+                model="google/gemini-2.5-flash-image",
+                resolution="2K",
+                aspect_ratio="1:1",
+            )
+
+        with self.assertRaisesRegex(ValueError, "does not support aspect_ratio"):
+            generator._build_openrouter_gemini_payload(
+                prompt="plain prompt",
+                model="google/gemini-3-pro-image",
+                resolution="2K",
+                aspect_ratio="1:8",
+            )
+
     def test_litellm_payload_preserves_prompt_and_model(self):
         payload = generator._build_litellm_generation_payload(
             prompt="plain prompt",
@@ -116,6 +155,50 @@ class GeneratorContractsTest(unittest.TestCase):
         self.assertEqual(openrouter_seen[1], generator.DEFAULT_OPENROUTER_MODEL)
         self.assertEqual(litellm_seen[0], "openrouter/gpt-image-2")
         self.assertEqual(litellm_seen[1], generator.DEFAULT_LITELLM_MODEL)
+
+    def test_openrouter_gemini_generation_posts_to_images_api(self):
+        seen = []
+        original_resolve_key = generator._resolve_env_api_key
+        original_post_json = generator._post_json
+        original_extract = generator._extract_image_bytes_from_images_response
+
+        def fake_post_json(url, token, payload, timeout, extra_headers=None):
+            seen.append(
+                {
+                    "url": url,
+                    "token": token,
+                    "payload": payload,
+                    "extra_headers": extra_headers,
+                }
+            )
+            return {"data": [{"b64_json": "ignored"}]}
+
+        try:
+            generator._resolve_env_api_key = lambda api_key, env_names, label: f"{label}-token"
+            generator._post_json = fake_post_json
+            generator._extract_image_bytes_from_images_response = lambda response, token: b"\x89PNG\r\n\x1a\n"
+
+            generator.generate_openrouter_gemini_image(
+                prompt="plain prompt",
+                model="google/gemini-3.1-flash-image",
+                resolution="4K",
+                aspect_ratio="9:16",
+                base_url="https://openrouter.ai/api/v1/images",
+                api_key="",
+                input_image_urls=["data:image/png;base64,abc"],
+            )
+        finally:
+            generator._resolve_env_api_key = original_resolve_key
+            generator._post_json = original_post_json
+            generator._extract_image_bytes_from_images_response = original_extract
+
+        self.assertEqual(seen[0]["url"], "https://openrouter.ai/api/v1/images")
+        self.assertEqual(seen[0]["token"], "OpenRouter-token")
+        self.assertEqual(seen[0]["payload"]["model"], "google/gemini-3.1-flash-image")
+        self.assertEqual(seen[0]["payload"]["resolution"], "4K")
+        self.assertEqual(seen[0]["payload"]["aspect_ratio"], "9:16")
+        self.assertNotIn("size", seen[0]["payload"])
+        self.assertNotIn("quality", seen[0]["payload"])
 
     def test_openrouter_responses_uses_openrouter_server_tool_payload(self):
         seen = []
@@ -474,6 +557,10 @@ class NodeContractsTest(unittest.TestCase):
         spec.loader.exec_module(module)
 
         self.assertEqual(module.NODE_CLASS_MAPPINGS["OpenRouterImageNode"].__name__, "OpenRouterImageNode")
+        self.assertEqual(
+            module.NODE_CLASS_MAPPINGS["OpenRouterGeminiImageNode"].__name__,
+            "OpenRouterGeminiImageNode",
+        )
         self.assertEqual(module.NODE_CLASS_MAPPINGS["LiteLLMImageNode"].__name__, "LiteLLMImageNode")
         self.assertEqual(
             module.NODE_CLASS_MAPPINGS["MixCodexCopycatImageI2INode"].__name__,
@@ -498,6 +585,10 @@ class NodeContractsTest(unittest.TestCase):
         self.assertEqual(
             module.NODE_DISPLAY_NAME_MAPPINGS["OpenRouterImageNode"],
             "OpenRouter Image (GPT Image 2)",
+        )
+        self.assertEqual(
+            module.NODE_DISPLAY_NAME_MAPPINGS["OpenRouterGeminiImageNode"],
+            "OpenRouter Gemini Image",
         )
         self.assertEqual(
             module.NODE_DISPLAY_NAME_MAPPINGS["LiteLLMImageNode"],
@@ -759,6 +850,50 @@ class NodeContractsTest(unittest.TestCase):
 
         self.assertEqual(seen[0]["prompt"], "plain prompt")
         self.assertEqual(seen[0]["input_image_urls"], ["data:image/png;base64,mask"])
+
+    def test_openrouter_gemini_node_routes_to_gemini_generator(self):
+        seen = []
+        original_has_comfyu = codex_image_node._HAS_COMFYU
+        original_mask_to_url = codex_image_node._image_tensor_and_mask_to_data_url
+        original_image_to_url = codex_image_node._image_tensor_to_data_url
+        original_image_to_tensor = codex_image_node._image_bytes_to_tensor
+        original_generate = codex_image_node.generate_openrouter_gemini_image
+
+        def fake_generate(**kwargs):
+            seen.append(kwargs)
+            return b"\x89PNG\r\n\x1a\n", "/tmp/out.png"
+
+        try:
+            codex_image_node._HAS_COMFYU = True
+            codex_image_node._image_tensor_and_mask_to_data_url = lambda image, mask: "data:image/png;base64,mask"
+            codex_image_node._image_tensor_to_data_url = lambda image: "data:image/png;base64,image"
+            codex_image_node._image_bytes_to_tensor = lambda img_bytes: "tensor"
+            codex_image_node.generate_openrouter_gemini_image = fake_generate
+
+            codex_image_node.OpenRouterGeminiImageNode().generate(
+                prompt="plain prompt",
+                model="google/gemini-3.1-flash-image",
+                resolution="2K",
+                aspect_ratio="16:9",
+                image=object(),
+                image_2=object(),
+                mask=object(),
+            )
+        finally:
+            codex_image_node._HAS_COMFYU = original_has_comfyu
+            codex_image_node._image_tensor_and_mask_to_data_url = original_mask_to_url
+            codex_image_node._image_tensor_to_data_url = original_image_to_url
+            codex_image_node._image_bytes_to_tensor = original_image_to_tensor
+            codex_image_node.generate_openrouter_gemini_image = original_generate
+
+        self.assertEqual(seen[0]["prompt"], "plain prompt")
+        self.assertEqual(seen[0]["model"], "google/gemini-3.1-flash-image")
+        self.assertEqual(seen[0]["resolution"], "2K")
+        self.assertEqual(seen[0]["aspect_ratio"], "16:9")
+        self.assertEqual(
+            seen[0]["input_image_urls"],
+            ["data:image/png;base64,mask", "data:image/png;base64,image"],
+        )
 
 
 if __name__ == "__main__":

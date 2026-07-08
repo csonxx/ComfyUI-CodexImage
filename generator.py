@@ -47,6 +47,10 @@ DEFAULT_BASE_URL = os.environ.get("CODEX_IMAGE_BASE_URL", "https://chatgpt.com/b
 DEFAULT_CODEX_SCRIPT = os.environ.get("CODEX_IMAGE_SCRIPT", "~/.codex-image/scripts/codex_image.py")
 DEFAULT_OPENROUTER_BASE_URL = os.environ.get("CODEX_IMAGE_OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1/images")
 DEFAULT_OPENROUTER_MODEL = os.environ.get("CODEX_IMAGE_OPENROUTER_MODEL", "openai/gpt-image-2")
+DEFAULT_OPENROUTER_GEMINI_MODEL = os.environ.get(
+    "CODEX_IMAGE_OPENROUTER_GEMINI_MODEL",
+    "google/gemini-2.5-flash-image",
+)
 DEFAULT_OPENROUTER_RESPONSES_MODEL = os.environ.get(
     "CODEX_IMAGE_OPENROUTER_RESPONSES_MODEL",
     os.environ.get("CODEX_IMAGE_OPENROUTER_CHAT_MODEL", "openai/gpt-5.2"),
@@ -73,6 +77,106 @@ SUPPORTED_SIZES = (
     "3840x2160",    # 4K 16:9
     "2160x3840",    # 4K 9:16
 )
+
+SUPPORTED_OPENROUTER_GEMINI_MODELS = (
+    "google/gemini-2.5-flash-image",
+    "google/gemini-3.1-flash-lite-image",
+    "google/gemini-3.1-flash-image",
+    "google/gemini-3-pro-image",
+    "google/gemini-3.1-flash-image-preview",
+    "google/gemini-3-pro-image-preview",
+    "google/gemini-2.5-flash-image-preview",
+)
+if DEFAULT_OPENROUTER_GEMINI_MODEL not in SUPPORTED_OPENROUTER_GEMINI_MODELS:
+    SUPPORTED_OPENROUTER_GEMINI_MODELS = (
+        DEFAULT_OPENROUTER_GEMINI_MODEL,
+        *SUPPORTED_OPENROUTER_GEMINI_MODELS,
+    )
+
+SUPPORTED_OPENROUTER_GEMINI_RESOLUTIONS = ("auto", "512", "1K", "2K", "4K")
+SUPPORTED_OPENROUTER_GEMINI_ASPECT_RATIOS = (
+    "auto",
+    "1:1",
+    "2:3",
+    "3:2",
+    "3:4",
+    "4:3",
+    "4:5",
+    "5:4",
+    "9:16",
+    "16:9",
+    "21:9",
+    "1:4",
+    "1:8",
+    "4:1",
+    "8:1",
+)
+
+_OPENROUTER_GEMINI_STANDARD_RATIOS = (
+    "1:1",
+    "2:3",
+    "3:2",
+    "3:4",
+    "4:3",
+    "4:5",
+    "5:4",
+    "9:16",
+    "16:9",
+    "21:9",
+)
+_OPENROUTER_GEMINI_EXTENDED_RATIOS = (
+    "1:1",
+    "1:4",
+    "1:8",
+    "2:3",
+    "3:2",
+    "3:4",
+    "4:1",
+    "4:3",
+    "4:5",
+    "5:4",
+    "8:1",
+    "9:16",
+    "16:9",
+    "21:9",
+)
+_OPENROUTER_GEMINI_CAPABILITIES = {
+    "google/gemini-2.5-flash-image": {
+        "resolutions": (),
+        "aspect_ratios": _OPENROUTER_GEMINI_STANDARD_RATIOS,
+        "max_references": 3,
+    },
+    "google/gemini-3.1-flash-lite-image": {
+        "resolutions": ("1K",),
+        "aspect_ratios": _OPENROUTER_GEMINI_EXTENDED_RATIOS,
+        "max_references": 14,
+    },
+    "google/gemini-3.1-flash-image": {
+        "resolutions": ("512", "1K", "2K", "4K"),
+        "aspect_ratios": _OPENROUTER_GEMINI_EXTENDED_RATIOS,
+        "max_references": 14,
+    },
+    "google/gemini-3-pro-image": {
+        "resolutions": ("1K", "2K", "4K"),
+        "aspect_ratios": _OPENROUTER_GEMINI_STANDARD_RATIOS,
+        "max_references": 14,
+    },
+    "google/gemini-3.1-flash-image-preview": {
+        "resolutions": ("512", "1K", "2K", "4K"),
+        "aspect_ratios": _OPENROUTER_GEMINI_EXTENDED_RATIOS,
+        "max_references": 14,
+    },
+    "google/gemini-3-pro-image-preview": {
+        "resolutions": ("1K", "2K", "4K"),
+        "aspect_ratios": _OPENROUTER_GEMINI_STANDARD_RATIOS,
+        "max_references": 14,
+    },
+    "google/gemini-2.5-flash-image-preview": {
+        "resolutions": (),
+        "aspect_ratios": (),
+        "max_references": 3,
+    },
+}
 
 # ── Auth ─────────────────────────────────────────────────────────────────────
 
@@ -996,6 +1100,73 @@ def _build_openrouter_payload(
     return payload
 
 
+def _normalize_openrouter_gemini_choice(value: str, field_name: str) -> str:
+    value = (value or "").strip()
+    if not value or value.lower() == "auto":
+        return "auto"
+    if field_name == "resolution":
+        return value.upper() if value.lower().endswith("k") else value
+    return value
+
+
+def _validate_openrouter_gemini_options(
+    model: str,
+    resolution: str,
+    aspect_ratio: str,
+    input_image_urls: list[str] | None,
+) -> None:
+    caps = _OPENROUTER_GEMINI_CAPABILITIES.get((model or "").strip())
+    if not caps:
+        return
+
+    allowed_resolutions = tuple(caps.get("resolutions") or ())
+    if resolution != "auto" and resolution not in allowed_resolutions:
+        supported = ", ".join(allowed_resolutions) if allowed_resolutions else "auto only"
+        raise ValueError(f"{model} does not support resolution={resolution!r}; supported: {supported}")
+
+    allowed_ratios = tuple(caps.get("aspect_ratios") or ())
+    if aspect_ratio != "auto" and aspect_ratio not in allowed_ratios:
+        supported = ", ".join(allowed_ratios) if allowed_ratios else "auto only"
+        raise ValueError(f"{model} does not support aspect_ratio={aspect_ratio!r}; supported: {supported}")
+
+    max_references = int(caps.get("max_references") or 0)
+    input_count = len([url for url in (input_image_urls or []) if url])
+    if max_references and input_count > max_references:
+        raise ValueError(f"{model} supports at most {max_references} reference image(s), got {input_count}")
+
+
+def _build_openrouter_gemini_payload(
+    prompt: str,
+    model: str,
+    resolution: str = "auto",
+    aspect_ratio: str = "1:1",
+    input_image_urls: list[str] | None = None,
+) -> dict[str, Any]:
+    actual_model = (model or "").strip() or DEFAULT_OPENROUTER_GEMINI_MODEL
+    resolution = _normalize_openrouter_gemini_choice(resolution, "resolution")
+    aspect_ratio = _normalize_openrouter_gemini_choice(aspect_ratio, "aspect_ratio")
+    _validate_openrouter_gemini_options(actual_model, resolution, aspect_ratio, input_image_urls)
+
+    payload: dict[str, Any] = {
+        "model": actual_model,
+        "prompt": prompt,
+        "n": 1,
+    }
+    if resolution != "auto":
+        payload["resolution"] = resolution
+    if aspect_ratio != "auto":
+        payload["aspect_ratio"] = aspect_ratio
+
+    refs = []
+    for image_url in input_image_urls or []:
+        if image_url:
+            refs.append({"type": "image_url", "image_url": {"url": image_url}})
+    if refs:
+        payload["input_references"] = refs
+
+    return payload
+
+
 def _generate_openrouter(
     prompt: str,
     model: str,
@@ -1021,6 +1192,41 @@ def _generate_openrouter(
         fmt=fmt,
         input_image_urls=input_image_urls,
         background=background,
+    )
+    extra_headers = {}
+    referer = os.environ.get("OPENROUTER_HTTP_REFERER", "").strip()
+    if referer:
+        extra_headers["HTTP-Referer"] = referer
+    title = os.environ.get("OPENROUTER_X_TITLE", "").strip()
+    if title:
+        extra_headers["X-Title"] = title
+    response = _post_json(url, token, payload, DEFAULT_TIMEOUT, extra_headers=extra_headers)
+    img_bytes = _extract_image_bytes_from_images_response(response, token)
+    return img_bytes, _write_temp_image(img_bytes, fmt)
+
+
+def generate_openrouter_gemini_image(
+    prompt: str,
+    model: str = "",
+    resolution: str = "auto",
+    aspect_ratio: str = "1:1",
+    base_url: str = "",
+    api_key: str = "",
+    input_image_urls: list[str] | None = None,
+    fmt: str = DEFAULT_FORMAT,
+) -> tuple[bytes, str]:
+    url = _resolve_openrouter_url(base_url)
+    token = _resolve_env_api_key(
+        api_key,
+        ("CODEX_IMAGE_OPENROUTER_API_KEY", "OPENROUTER_API_KEY"),
+        "OpenRouter",
+    )
+    payload = _build_openrouter_gemini_payload(
+        prompt=prompt,
+        model=model or DEFAULT_OPENROUTER_GEMINI_MODEL,
+        resolution=resolution,
+        aspect_ratio=aspect_ratio,
+        input_image_urls=input_image_urls,
     )
     extra_headers = {}
     referer = os.environ.get("OPENROUTER_HTTP_REFERER", "").strip()

@@ -55,6 +55,7 @@ This package also provides separate provider nodes:
 | Node | API target | API key |
 |------|------------|---------|
 | `OpenRouter Image (GPT Image 2)` | OpenRouter dedicated Images API | `CODEX_IMAGE_OPENROUTER_API_KEY` or `OPENROUTER_API_KEY` |
+| `OpenRouter Gemini Image` | OpenRouter dedicated Images API with Gemini/Nano Banana `resolution` + `aspect_ratio` fields | `CODEX_IMAGE_OPENROUTER_API_KEY` or `OPENROUTER_API_KEY` |
 | `Mix Codex Copycat Image I2I (GPT Image 2)` | Codex-style I2I packing, then Responses API tool call through OpenRouter or LiteLLM selected by `mode` | OpenRouter or LiteLLM environment variables |
 | `GPT-Image-2 Response i2i` | Codex-style I2I packing, then native Responses `image_generation` + `action=edit` through OpenRouter or LiteLLM selected by `mode` | OpenRouter or LiteLLM environment variables |
 | `Requesty I2I (gpt-image-2 edit)` | Requesty OpenAI-compatible `/v1/images/edits` multipart edit route | Optional node `api_key`, then `REQUESTY_API_KEY` |
@@ -67,6 +68,7 @@ Provider nodes let you enter the `model` name directly in the node. `base_url` i
 export OPENROUTER_API_KEY="sk-or-..."
 export CODEX_IMAGE_OPENROUTER_BASE_URL="https://openrouter.ai/api/v1/images"
 export CODEX_IMAGE_OPENROUTER_MODEL="openai/gpt-image-2"
+export CODEX_IMAGE_OPENROUTER_GEMINI_MODEL="google/gemini-2.5-flash-image"
 export CODEX_IMAGE_OPENROUTER_RESPONSES_MODEL="openai/gpt-5.2"
 export CODEX_IMAGE_OPENROUTER_IMAGE_MODEL="openai/gpt-image-2"
 
@@ -96,6 +98,8 @@ tr '\0' '\n' < /proc/$pid/environ | sed -n -E 's/^(OPENROUTER_API_KEY|CODEX_IMAG
 ```
 
 The OpenRouter and LiteLLM provider nodes support prompt-only generation. If you connect `image`, `image_2`, or `mask`, they send the request as an image edit/reference-image request when the provider endpoint supports it. The prompt text is sent as entered; size, quality, and mask are represented through API fields or image alpha/multipart data instead of prompt text.
+
+`OpenRouter Gemini Image` is the Gemini/Nano Banana variant of the dedicated OpenRouter Images API node. It sends `resolution` and `aspect_ratio` instead of GPT Image 2's `size`, `quality`, and `background` fields. The node includes OpenRouter Gemini image models such as `google/gemini-2.5-flash-image`, `google/gemini-3.1-flash-image`, and `google/gemini-3-pro-image`, and validates the known per-model resolution/aspect-ratio limits before sending. Optional `image`, `image_2`, and `mask` are sent as `input_references`; mask is baked into the first image alpha channel and should be treated as reference-image guidance, not a guaranteed OpenAI-style edit mask.
 
 `Mix Codex Copycat Image I2I (GPT Image 2)` is image-input-only and mirrors `Codex Image I2I (GPT Image 2)` reference packing: the main image is always sent, `image_2` is a second reference, and a ComfyUI `mask` is baked into the first image alpha channel. Its `mode` selects `openrouter` or `litellm`, using the same environment-variable API keys/base URLs as the dedicated provider nodes. Unlike the dedicated provider nodes, this node posts a Responses API payload to the provider's `/responses` endpoint: `litellm` mode uses the OpenAI-compatible `tools: [{"type": "image_generation", ...}]` shape, while `openrouter` mode uses OpenRouter's server-tool shape `tools: [{"type": "openrouter:image_generation", "parameters": {...}}]`. In `openrouter` mode, the node's `model` is the Responses model that sees the inputs and calls the tool, and `image_model` is the actual image-generation model.
 
@@ -237,6 +241,7 @@ All read at import time:
 | `CODEX_HOME` | `~/.codex` | Codex auth directory |
 | `CODEX_IMAGE_OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1/images` | OpenRouter Images API endpoint |
 | `CODEX_IMAGE_OPENROUTER_MODEL` | `openai/gpt-image-2` | Default model for the OpenRouter node |
+| `CODEX_IMAGE_OPENROUTER_GEMINI_MODEL` | `google/gemini-2.5-flash-image` | Default model for the OpenRouter Gemini node |
 | `CODEX_IMAGE_OPENROUTER_RESPONSES_MODEL` | `openai/gpt-5.2` | Default Responses model for OpenRouter Responses-based nodes |
 | `CODEX_IMAGE_OPENROUTER_IMAGE_MODEL` | `openai/gpt-image-2` | Actual OpenRouter image tool model for Responses I2I nodes |
 | `CODEX_IMAGE_OPENROUTER_API_KEY` / `OPENROUTER_API_KEY` | _(empty)_ | OpenRouter API key |
