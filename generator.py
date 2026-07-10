@@ -20,7 +20,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 # Simple print-based error logger
 def _log_error(msg: str, exc: Exception | None = None) -> None:
@@ -793,26 +793,21 @@ def _build_openrouter_responses_payload(
 
 # ── API mode ──────────────────────────────────────────────────────────────────
 
-def _run_responses_image_request(
-    api_url: str,
-    token: str,
-    payload: dict[str, Any],
-    fmt: str,
-    extra_headers: dict[str, str] | None = None,
-) -> tuple[bytes, str]:
+def _run_with_retries(operation: Callable[[], Any]) -> Any:
+    """Run ``operation`` with retry + exponential backoff on transient errors.
+
+    Retries on rate-limit (429) and transient server errors (5xx and the codes
+    in :func:`_is_retryable_api_code`). This is the same policy the streaming
+    Responses path uses; sharing it lets the plain JSON / multipart image
+    endpoints (OpenRouter, LiteLLM, Requesty, WaveSpeed) recover from an
+    upstream hiccup (e.g. a Cloudflare 520 from the OpenAI image upstream)
+    instead of failing the whole ComfyUI job on the first attempt.
+    """
     last_retryable_error: RuntimeError | None = None
 
     for attempt in range(max(1, DEFAULT_MAX_RETRIES)):
         try:
-            events = _post_streaming(
-                api_url,
-                token,
-                payload,
-                DEFAULT_TIMEOUT,
-                extra_headers=extra_headers,
-            )
-            img_bytes = _extract_image_bytes_from_responses_events(events, token)
-            break
+            return operation()
         except (CodexImageRateLimitError, CodexImageTransientAPIError) as exc:
             last_retryable_error = exc
             if attempt >= DEFAULT_MAX_RETRIES - 1:
@@ -838,9 +833,28 @@ def _run_responses_image_request(
                 file=sys.stderr,
             )
             time.sleep(delay)
-    else:
-        raise last_retryable_error or RuntimeError("Codex image generation failed")
 
+    raise last_retryable_error or RuntimeError("Codex image generation failed")
+
+
+def _run_responses_image_request(
+    api_url: str,
+    token: str,
+    payload: dict[str, Any],
+    fmt: str,
+    extra_headers: dict[str, str] | None = None,
+) -> tuple[bytes, str]:
+    def _operation() -> bytes:
+        events = _post_streaming(
+            api_url,
+            token,
+            payload,
+            DEFAULT_TIMEOUT,
+            extra_headers=extra_headers,
+        )
+        return _extract_image_bytes_from_responses_events(events, token)
+
+    img_bytes = _run_with_retries(_operation)
     return img_bytes, _write_temp_image(img_bytes, fmt)
 
 
@@ -1200,7 +1214,9 @@ def _generate_openrouter(
     title = os.environ.get("OPENROUTER_X_TITLE", "").strip()
     if title:
         extra_headers["X-Title"] = title
-    response = _post_json(url, token, payload, DEFAULT_TIMEOUT, extra_headers=extra_headers)
+    response = _run_with_retries(
+        lambda: _post_json(url, token, payload, DEFAULT_TIMEOUT, extra_headers=extra_headers)
+    )
     img_bytes = _extract_image_bytes_from_images_response(response, token)
     return img_bytes, _write_temp_image(img_bytes, fmt)
 
@@ -1235,7 +1251,9 @@ def generate_openrouter_gemini_image(
     title = os.environ.get("OPENROUTER_X_TITLE", "").strip()
     if title:
         extra_headers["X-Title"] = title
-    response = _post_json(url, token, payload, DEFAULT_TIMEOUT, extra_headers=extra_headers)
+    response = _run_with_retries(
+        lambda: _post_json(url, token, payload, DEFAULT_TIMEOUT, extra_headers=extra_headers)
+    )
     img_bytes = _extract_image_bytes_from_images_response(response, token)
     return img_bytes, _write_temp_image(img_bytes, fmt)
 
@@ -1479,7 +1497,9 @@ def generate_requesty_edit(
         "n": "1",
     }
     files = _requesty_image_urls_to_multipart_files(input_image_urls)
-    response = _post_multipart(url, token, fields, files, DEFAULT_TIMEOUT)
+    response = _run_with_retries(
+        lambda: _post_multipart(url, token, fields, files, DEFAULT_TIMEOUT)
+    )
 
     data = response.get("data")
     if not isinstance(data, list) or not data or not isinstance(data[0], dict):
@@ -1663,7 +1683,9 @@ def generate_wavespeed_edit(
     if quality and quality != "auto":
         payload["quality"] = quality
 
-    response = _post_json(url, token, payload, DEFAULT_TIMEOUT)
+    response = _run_with_retries(
+        lambda: _post_json(url, token, payload, DEFAULT_TIMEOUT)
+    )
     img_bytes = _wait_for_wavespeed_result(response, token, base_url, DEFAULT_TIMEOUT)
     return img_bytes, _write_temp_image(img_bytes, fmt)
 
@@ -1698,7 +1720,9 @@ def _generate_litellm(
         if quality:
             fields["quality"] = quality
         files = _data_urls_to_multipart_files(input_image_urls, mask_image_url)
-        response = _post_multipart(url, token, fields, files, DEFAULT_TIMEOUT)
+        response = _run_with_retries(
+            lambda: _post_multipart(url, token, fields, files, DEFAULT_TIMEOUT)
+        )
     else:
         url = _resolve_litellm_url(base_url, edit=False)
         payload = _build_litellm_generation_payload(
@@ -1707,7 +1731,9 @@ def _generate_litellm(
             size=size,
             quality=quality,
         )
-        response = _post_json(url, token, payload, DEFAULT_TIMEOUT)
+        response = _run_with_retries(
+            lambda: _post_json(url, token, payload, DEFAULT_TIMEOUT)
+        )
 
     img_bytes = _extract_image_bytes_from_images_response(response, token)
     return img_bytes, _write_temp_image(img_bytes, fmt)
