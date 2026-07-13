@@ -1,8 +1,10 @@
 import importlib.util
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -13,6 +15,22 @@ import generator  # noqa: E402
 
 
 class GeneratorContractsTest(unittest.TestCase):
+    def test_openai_api_key_environment_variable_does_not_require_auth_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "OPENAI_API_KEY": "environment-key",
+                    "CODEX_HOME": directory,
+                },
+                clear=False,
+            ):
+                self.assertEqual(generator._resolve_api_key(""), "environment-key")
+
+    def test_explicit_api_key_overrides_openai_api_key_environment_variable(self):
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "environment-key"}, clear=False):
+            self.assertEqual(generator._resolve_api_key("node-key"), "node-key")
+
     def test_codex_payload_preserves_prompt_and_model(self):
         payload = generator._build_payload(
             prompt="plain prompt",

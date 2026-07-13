@@ -188,6 +188,10 @@ def _load_auth_from_codex_home() -> str:
       2. OPENAI_API_KEY field in ~/.codex/auth.json
       3. ChatGPT OAuth access_token in ~/.codex/auth.json (after `codex login`)
     """
+    env_key = (os.environ.get("OPENAI_API_KEY") or "").strip()
+    if env_key:
+        return env_key
+
     codex_home = Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser()
     auth_path = codex_home / "auth.json"
     if not auth_path.exists():
