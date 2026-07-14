@@ -132,6 +132,23 @@ def _mask_tensor_to_pil_l(mask: "torch.Tensor", size: tuple[int, int]) -> "Image
     return pil
 
 
+def _mask_tensor_size(mask: "torch.Tensor") -> tuple[int, int]:
+    """Return a ComfyUI MASK's native (width, height) before any resizing."""
+    if not _HAS_COMFYU:
+        raise RuntimeError("ComfyUI dependencies (torch, numpy, PIL) not available.")
+    if mask is None:
+        raise ValueError("mask input is required")
+
+    mask_tensor = mask[0] if len(mask.shape) in (3, 4) else mask
+    mask_np = np.squeeze(mask_tensor.detach().cpu().numpy())
+    if mask_np.ndim == 3:
+        mask_np = mask_np[..., 0]
+    if mask_np.ndim != 2:
+        raise ValueError(f"mask must be 2D after squeezing, got shape {mask_np.shape}")
+    height, width = mask_np.shape
+    return int(width), int(height)
+
+
 def _image_tensor_and_mask_to_data_url(image: "torch.Tensor", mask: "torch.Tensor") -> str:
     """Convert an image plus ComfyUI MASK to RGBA PNG.
 
@@ -157,6 +174,14 @@ def _mask_tensor_to_transparent_data_url(mask: "torch.Tensor", size: tuple[int, 
     pil = Image.new("RGBA", size, (0, 0, 0, 255))
     pil.putalpha(alpha)
     return _pil_to_png_data_url(pil)
+
+
+def _pil_to_image_tensor(image: "Image.Image") -> "torch.Tensor":
+    """Convert a PIL RGB/RGBA image to a single ComfyUI IMAGE tensor."""
+    if not _HAS_COMFYU:
+        raise RuntimeError("ComfyUI dependencies (torch, numpy, PIL) not available.")
+    image_np = np.asarray(image).astype(np.float32) / 255.0
+    return torch.from_numpy(image_np).unsqueeze(0)
 
 
 def _write_output_copy(img_bytes: bytes, img_path: str, output_path: str, fmt: str) -> str:
@@ -851,6 +876,53 @@ class LiteLLMImageNode:
         tensor = _image_bytes_to_tensor(img_bytes)
         img_path = _write_output_copy(img_bytes, img_path, output_path, format)
         return (tensor, img_path)
+
+
+class ComfyProxyImageMaskToRGBA:
+    """Internal stage helper that reproduces CodexImage I2I mask packing."""
+
+    CATEGORY = "CodexImage/internal"
+    FUNCTION = "pack"
+    RETURN_TYPES = ("IMAGE",)
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": ("IMAGE", {"forceInput": True}),
+                "mask": ("MASK", {"forceInput": True}),
+            },
+        }
+
+    def pack(self, image, mask):
+        # Keep the exact Comfy white=edit -> transparent alpha convention used
+        # by _collect_codex_i2i_images for external image providers.
+        pil = _image_tensor_to_pil_rgb(image).convert("RGBA")
+        mask_l = _mask_tensor_to_pil_l(mask, pil.size)
+        pil.putalpha(Image.eval(mask_l, lambda px: 255 - px))
+        return (_pil_to_image_tensor(pil),)
+
+
+class ComfyProxyMaskToTransparentImage:
+    """Internal stage helper for OpenAI-compatible multipart edit masks."""
+
+    CATEGORY = "CodexImage/internal"
+    FUNCTION = "convert"
+    RETURN_TYPES = ("IMAGE",)
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "mask": ("MASK", {"forceInput": True}),
+            },
+        }
+
+    def convert(self, mask):
+        mask_l = _mask_tensor_to_pil_l(mask, _mask_tensor_size(mask))
+        image = Image.new("RGBA", mask_l.size, (0, 0, 0, 255))
+        image.putalpha(Image.eval(mask_l, lambda px: 255 - px))
+        return (_pil_to_image_tensor(image),)
 
 
 class ComfyProxyValueOutput:

@@ -1,4 +1,6 @@
 from .codex_image_node import (
+    ComfyProxyImageMaskToRGBA,
+    ComfyProxyMaskToTransparentImage,
     ComfyProxyValueOutput,
     CodexImageI2INode,
     CodexImageNode,
@@ -21,6 +23,8 @@ NODE_CLASS_MAPPINGS = {
     "RequestyImageEditI2INode": RequestyImageEditI2INode,
     "WaveSpeedImageEditI2INode": WaveSpeedImageEditI2INode,
     "LiteLLMImageNode": LiteLLMImageNode,
+    "ComfyProxyImageMaskToRGBA": ComfyProxyImageMaskToRGBA,
+    "ComfyProxyMaskToTransparentImage": ComfyProxyMaskToTransparentImage,
     "ComfyProxyValueOutput": ComfyProxyValueOutput,
 }
 
@@ -34,6 +38,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "RequestyImageEditI2INode": "Requesty I2I (gpt-image-2 edit)",
     "WaveSpeedImageEditI2INode": "WaveSpeed I2I (gpt-image-2 edit)",
     "LiteLLMImageNode": "LiteLLM Image (GPT Image 2)",
+    "ComfyProxyImageMaskToRGBA": "ComfyProxy Image Mask To RGBA",
+    "ComfyProxyMaskToTransparentImage": "ComfyProxy Mask To Transparent Image",
     "ComfyProxyValueOutput": "ComfyProxy Value Output",
 }
 
